@@ -48,7 +48,7 @@ pytest
 
 ## Deploy on Vercel with Neon
 
-The repository includes a Vercel Python entry point and routes the site and API through FastAPI. For deployment, create a Neon PostgreSQL project and use its **pooled** connection string as `DATABASE_URL` in the Vercel project's production environment. Porta creates or migrates its schema when the service starts. The local SQLite database is not copied to Neon; the production database starts empty unless you separately arrange a deliberate data migration.
+Vercel detects the FastAPI application in `app/main.py` directly; no catch-all rewrite is needed. For deployment, create a Neon PostgreSQL project and use its **pooled** connection string as `DATABASE_URL` in the Vercel project's production environment. Porta creates or migrates its schema when the service starts. The local SQLite database is not copied to Neon; the production database starts empty unless you separately arrange a deliberate data migration.
 
 Import this GitHub repository into Vercel and set the following environment variables before the first production deployment:
 
