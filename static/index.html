@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7f8f5">
+    <meta name="description" content="Find your people on Porta. Join communities, share what you love, chat, and discover something new.">
+    <title>Porta — Learn together</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=7">
+    <link rel="stylesheet" href="/assets/auth.css?v=7">
+    <script src="/assets/app.js?v=9" defer></script>
+  </head>
+  <body>
+    <section class="auth-screen" id="auth-screen">
+      <div class="auth-brand-row">
+        <a class="brand" href="/" aria-label="Porta home"><span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M6 26V11a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v15M11 26v-7a5 5 0 0 1 10 0v7M4 26h24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="brand-word">porta</span></a>
+        <span class="auth-location">People · interests · ideas</span>
+      </div>
+      <div class="auth-layout">
+        <div class="auth-story">
+          <div class="auth-story-intro">
+            <div class="auth-eyebrow"><span class="auth-eyebrow-dot"></span> A SOCIAL SPACE FOR SHARED INTERESTS</div>
+            <h1>Your interests.<br><span>Your people.</span></h1>
+            <p>Join communities, share what you’re into, and turn a shared interest into a real conversation.</p>
+            <div class="auth-features" aria-label="Things to do on Porta">
+              <span><b>DISCOVER</b> Find your communities</span>
+              <span><b>CONNECT</b> Talk beyond the feed</span>
+              <span><b>GROW</b> Learn from each other</span>
+            </div>
+          </div>
+          <div class="auth-visual" aria-hidden="true">
+            <div class="social-collage">
+              <div class="collage-card collage-community">
+                <div class="collage-photo collage-photo-city">
+                  <span class="photo-sun"></span><span class="photo-building building-one"></span><span class="photo-building building-two"></span><span class="photo-building building-three"></span>
+                  <span class="photo-label">DOHA, AFTER HOURS</span>
+                </div>
+                <div class="collage-card-copy"><span class="collage-category">COMMUNITY</span><b>Frame by Frame</b><small>Photography · Find your angle</small></div>
+              </div>
+              <div class="collage-card collage-post">
+                <div class="collage-post-top"><span class="mini-avatar avatar-maya">M</span><span><b>Maya A.</b><small>in The Makers’ Table</small></span><span class="collage-more">···</span></div>
+                <div class="collage-artwork"><span class="artwork-sun"></span><span class="artwork-line"></span><span class="artwork-type">MAKE<br>STUFF.</span></div>
+                <div class="collage-post-bottom"><b>Small ideas, made real.</b><span>↗ &nbsp; Join the conversation</span></div>
+              </div>
+              <div class="collage-card collage-chat">
+                <div class="collage-chat-heading"><span class="mini-avatar avatar-ali">A</span><span><b>Ali</b><small>Community chat</small></span><span class="chat-status"></span></div>
+                <div class="chat-message message-in">Anyone up for a photo walk this weekend?</div>
+                <div class="chat-message message-out">I’m in. Golden hour?</div>
+                <div class="chat-reply">That’s the one ✨</div>
+                <div class="chat-compose"><span>Message your community…</span><b>↑</b></div>
+              </div>
+              <div class="collage-card collage-interests">
+                <div class="collage-interest-heading"><span>YOUR NEXT RABBIT HOLE</span><b>↗</b></div>
+                <div class="interest-tags"><span>film photos</span><span>Arabic slang</span><span>side projects</span><span>+ your thing</span></div>
+              </div>
+              <div class="collage-note"><span class="collage-note-dot"></span> A glimpse of Porta</div>
+            </div>
+          </div>
+        </div>
+        <div class="auth-panel">
+          <div class="auth-tabs" role="tablist" aria-label="Account access">
+            <button class="auth-tab active" id="login-tab" type="button" role="tab" aria-selected="true" aria-controls="login-panel">Sign in</button>
+            <button class="auth-tab" id="register-tab" type="button" role="tab" aria-selected="false" aria-controls="register-panel">Create account</button>
+          </div>
+          <div id="login-panel" role="tabpanel" aria-labelledby="login-tab">
+            <div class="form-heading"><span class="section-kicker">WELCOME BACK</span><h2>Sign in to Porta</h2><p>Continue to your communities and conversations.</p></div>
+            <form id="login-form">
+              <label class="field-label" for="login-email">Email address</label><input id="login-email" name="email" type="email" required autocomplete="email" placeholder="you@example.com">
+              <label class="field-label" for="login-password">Password</label><input id="login-password" name="password" type="password" required autocomplete="current-password" placeholder="Your password">
+              <p class="forgot-password-row"><button class="forgot-password-link" id="forgot-password-link" type="button">Forgot password?</button></p>
+              <p class="auth-feedback" id="login-feedback" role="alert" aria-live="polite"></p>
+              <button class="button auth-submit" type="submit">Sign in <span aria-hidden="true">→</span></button>
+            </form>
+            <div class="social-divider"><span>OR CONTINUE WITH</span></div>
+            <div class="social-login" aria-label="Log in with a social account">
+              <a class="social-button" href="/api/auth/google"><span class="google-mark" aria-hidden="true">G</span><span>Continue with Google</span></a>
+              <a class="social-button linkedin-button" href="/api/auth/linkedin"><span class="linkedin-mark" aria-hidden="true">in</span><span>Continue with LinkedIn</span></a>
+            </div>
+            <p class="reset-setup-note" id="social-setup-note" hidden></p>
+            <p class="auth-switch">New to Porta? <button type="button" data-show-register>Create an account</button></p>
+          </div>
+          <div id="register-panel" role="tabpanel" aria-labelledby="register-tab" hidden>
+            <div class="form-heading register-heading"><span class="section-kicker">START WITH YOU</span><h2>Create your Porta profile</h2><p>Tell us what you’re interested in and how you’d like to connect.</p></div>
+            <p class="reset-setup-note" id="whatsapp-setup-note" role="status" hidden>WhatsApp verification needs Porta’s Meta WhatsApp Cloud API credentials and approved code template before account creation can finish.</p>
+            <form id="register-form">
+              <div class="register-grid">
+                <div class="form-field"><label class="field-label" for="register-first-name">First name <span>*</span></label><input id="register-first-name" name="first_name" required minlength="1" maxlength="40" autocomplete="given-name" placeholder="First name"></div>
+                <div class="form-field"><label class="field-label" for="register-last-name">Last name <span>*</span></label><input id="register-last-name" name="last_name" required minlength="1" maxlength="40" autocomplete="family-name" placeholder="Last name"></div>
+                <div class="form-field"><label class="field-label" for="register-username">Username <span>*</span></label><input id="register-username" name="username" required minlength="3" maxlength="30" pattern="[A-Za-z0-9_.]+" autocomplete="username" placeholder="Choose a username"><small class="input-hint">Letters, numbers, dots and underscores.</small></div>
+                <div class="form-field"><label class="field-label" for="register-email">Email address <span>*</span></label><input id="register-email" name="email" type="email" required maxlength="254" autocomplete="email" placeholder="you@example.com"></div>
+                <div class="form-field"><label class="field-label" for="register-phone">Phone number <span>*</span></label><div class="phone-number-row"><select id="register-phone-code" aria-label="Country calling code" required></select><input id="register-phone" name="phone_number" type="tel" required minlength="5" maxlength="24" autocomplete="tel-national" placeholder="5555 1234"></div><small class="input-hint" id="phone-code-status">Choose your country to set its calling code.</small></div>
+                <div class="form-field"><label class="field-label" for="register-password">Create a password <span>*</span></label><input id="register-password" name="password" type="password" required minlength="10" maxlength="128" autocomplete="new-password" placeholder="At least 10 characters"><small class="input-hint">Use at least 10 characters.</small></div>
+                <div class="form-field"><label class="field-label" for="register-password-confirm">Confirm password <span>*</span></label><input id="register-password-confirm" name="password_confirmation" type="password" required minlength="10" maxlength="128" autocomplete="new-password" placeholder="Enter your password again"></div>
+                <div class="form-field form-field-wide"><label class="field-label" for="register-location">Where are you based? <span>*</span></label><div class="country-picker" data-country-picker><input id="register-location" name="location" required minlength="2" maxlength="80" value="Qatar" autocomplete="country-name" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="country-suggestions" placeholder="Search countries"><div class="suggestion-list" id="country-suggestions" role="listbox" hidden></div></div></div>
+              </div>
+              <fieldset class="question-field"><legend class="field-label">How would you like to take part? <span>*</span></legend><div class="choice-chips role-chips">
+                <label class="choice-chip"><input type="radio" name="role" value="learner" checked><span>Explore and learn</span></label>
+                <label class="choice-chip"><input type="radio" name="role" value="peer_tutor"><span>Share what I know</span></label>
+                <label class="choice-chip"><input type="radio" name="role" value="both"><span>Both</span></label>
+              </div></fieldset>
+              <div class="form-field"><label class="field-label" for="register-interests-input">What are you interested in? <span>*</span></label><div class="tag-entry" data-tag-input data-name="interests" data-suggestions="AI,Arabic,art,books,business,cinema,content creation,cooking,creative writing,design,entrepreneurship,film,fitness,gaming,graphic design,history,languages,marketing,math,music,photography,podcasts,programming,psychology,Python,science,sports,startups,technology,travel,video editing,web development"><div class="tag-values" aria-live="polite"></div><input class="tag-input-control" id="register-interests-input" autocomplete="off" placeholder="Start typing, e.g. Python, photography..." aria-label="Add an interest" aria-autocomplete="list" aria-expanded="false" aria-controls="register-interests-suggestions" role="combobox"><div class="suggestion-list" id="register-interests-suggestions" role="listbox" hidden></div></div><small class="input-hint">Type a topic and press Enter. Add as many as you like.</small></div>
+              <div class="form-field conditional-field" id="register-goal-field"><label class="field-label" for="register-goal-input">What would you like to explore?</label><div class="tag-entry" data-tag-input data-name="learning_goals" data-suggestions="AI,Arabic,biology,business,chemistry,design,English,finance,history,JavaScript,math,photography,Python,public speaking,science,Spanish,web development"><div class="tag-values" aria-live="polite"></div><input class="tag-input-control" id="register-goal-input" autocomplete="off" placeholder="Start typing, e.g. Python, public speaking..." aria-label="Add something you would like to explore" aria-autocomplete="list" aria-expanded="false" aria-controls="register-goals-suggestions" role="combobox"><div class="suggestion-list" id="register-goals-suggestions" role="listbox" hidden></div></div><small class="input-hint">Type an interest or skill and press Enter. Add as many as you like.</small></div>
+              <div class="form-field conditional-field" id="share-skills-field" hidden><label class="field-label" for="register-skills-input">What could you share with someone? <span>*</span></label><div class="tag-entry" data-tag-input data-name="skills_to_share" data-suggestions="AI,Arabic,art,baking,business,chemistry,coding,design,English,fitness,graphic design,math,music,photography,Python,science,social media,Spanish,video editing,web development,writing"><div class="tag-values" aria-live="polite"></div><input class="tag-input-control" id="register-skills-input" autocomplete="off" placeholder="Start typing, e.g. Python, drawing..." aria-label="Add a skill you could share" aria-autocomplete="list" aria-expanded="false" aria-controls="register-skills-suggestions" role="combobox"><div class="suggestion-list" id="register-skills-suggestions" role="listbox" hidden></div></div><small class="input-hint">Type a skill and press Enter. Add as many as you like.</small></div>
+              <div class="form-field"><label class="field-label" for="register-languages-input">Language you’re comfortable in <span>*</span></label><div class="tag-entry" data-tag-input data-name="languages" data-limit="3" data-suggestions="Arabic,English,French,German,Hindi,Italian,Japanese,Korean,Malayalam,Mandarin,Portuguese,Punjabi,Russian,Spanish,Swahili,Tagalog,Turkish,Urdu"><div class="tag-values" aria-live="polite"></div><input class="tag-input-control" id="register-languages-input" autocomplete="off" placeholder="Start typing, e.g. Arabic..." aria-label="Add a language you are comfortable in" aria-autocomplete="list" aria-expanded="false" aria-controls="register-languages-suggestions" role="combobox"><div class="suggestion-list" id="register-languages-suggestions" role="listbox" hidden></div></div><small class="input-hint">Choose up to 3. Type to see suggestions or add your own.</small></div>
+              <fieldset class="question-field"><legend class="field-label">How do you prefer to learn? <small>Optional</small></legend><div class="choice-chips style-chips">
+                <label class="choice-chip"><input type="radio" name="learning_style" value="one_to_one"><span>One to one</span></label>
+                <label class="choice-chip"><input type="radio" name="learning_style" value="small_group"><span>Small group</span></label>
+                <label class="choice-chip"><input type="radio" name="learning_style" value="flexible" checked><span>Either works</span></label>
+              </div></fieldset>
+              <div class="form-field"><label class="field-label" for="register-bio">Short introduction <small>Optional</small></label><textarea id="register-bio" name="bio" maxlength="240" rows="2" placeholder="A short intro for your profile"></textarea></div>
+              <label class="auth-consent"><input type="checkbox" name="consent" required><span>I agree to create a Porta account, store my profile on this server, and follow Porta’s community guidelines.</span></label>
+              <p class="auth-feedback" id="register-feedback" role="alert" aria-live="polite"></p>
+              <button class="button auth-submit" type="submit">Create account <span aria-hidden="true">→</span></button>
+            </form>
+            <section class="verification-step" id="register-verification" aria-live="polite" hidden>
+              <span class="section-kicker" id="verification-kicker">STEP 1 OF 2</span>
+              <h3 id="verification-title">Verify your WhatsApp number</h3>
+              <p id="verification-description"></p>
+              <form id="verification-code-form">
+                <label class="field-label" for="verification-code">6-digit verification code</label>
+                <input id="verification-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required placeholder="000000">
+                <p class="auth-feedback" id="verification-feedback" role="alert" aria-live="polite"></p>
+                <button class="button auth-submit" type="submit" id="verify-code-button">Verify number <span aria-hidden="true">→</span></button>
+              </form>
+              <button class="verification-resend" id="resend-verification" type="button">Send a new code</button>
+            </section>
+            <p class="auth-switch">Already have an account? <button type="button" data-show-login>Sign in</button></p>
+          </div>
+          <div id="password-reset-panel" role="region" aria-labelledby="password-reset-title" hidden>
+            <div class="form-heading"><span class="section-kicker">LET’S GET YOU BACK IN</span><h2 id="password-reset-title">Reset your password.</h2><p>We’ll email you a one-time link. It expires after 30 minutes.</p></div>
+            <form id="password-reset-request-form">
+              <label class="field-label" for="reset-email">Email address</label>
+              <input id="reset-email" name="email" type="email" required maxlength="254" autocomplete="email" placeholder="you@example.com">
+              <p class="reset-setup-note" id="reset-setup-note" hidden>Password reset emails aren’t set up yet. Ask the Porta administrator to configure email delivery.</p>
+              <p class="reset-feedback" id="reset-request-feedback" role="status" aria-live="polite"></p>
+              <button class="button auth-submit" type="submit">Send reset link <span aria-hidden="true">→</span></button>
+            </form>
+            <form id="password-reset-confirm-form" hidden>
+              <label class="field-label" for="reset-new-password">New password</label>
+              <input id="reset-new-password" name="new_password" type="password" required minlength="10" maxlength="128" autocomplete="new-password" placeholder="At least 10 characters">
+              <label class="field-label" for="reset-confirm-password">Confirm new password</label>
+              <input id="reset-confirm-password" name="confirm_password" type="password" required minlength="10" maxlength="128" autocomplete="new-password" placeholder="Enter it again">
+              <p class="reset-feedback" id="reset-confirm-feedback" role="alert" aria-live="polite"></p>
+              <button class="button auth-submit" type="submit">Save new password <span aria-hidden="true">→</span></button>
+            </form>
+            <p class="auth-switch"><button id="back-to-login" type="button">← Back to log in</button></p>
+          </div>
+        </div>
+      </div>
+      <p class="auth-footer">PORTA · PEOPLE, INTERESTS, IDEAS <span>By creating an account, you agree to use Porta respectfully.</span></p>
+    </section>
+    <header class="site-header">
+      <a class="brand" href="#" aria-label="Porta home">
+        <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M6 26V11a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v15M11 26v-7a5 5 0 0 1 10 0v7M4 26h24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="brand-word">porta</span>
+      </a>
+      <nav class="desktop-nav" aria-label="Main navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href="#discover">What you can learn</a>
+        <a href="#ai">Porta AI</a>
+      </nav>
+      <div class="signed-in-actions"><a class="button button-small header-cta" href="#profile">Your profile <span aria-hidden="true">↗</span></a><button type="button" class="logout-button">Log out</button></div>
+    </header>
+
+    <main>
+      <section class="porta-app-shell" id="porta-app-shell" aria-label="Porta app">
+        <aside class="porta-sidebar" id="porta-sidebar">
+          <a class="brand sidebar-brand" href="#" data-app-nav="home" aria-label="Porta home">
+            <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M6 26V11a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v15M11 26v-7a5 5 0 0 1 10 0v7M4 26h24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="brand-word">porta</span>
+          </a>
+          <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Expand navigation" aria-expanded="false"><span aria-hidden="true">☰</span></button>
+          <nav class="porta-nav" aria-label="Porta navigation">
+            <button class="porta-nav-item active" type="button" data-app-nav="home" aria-current="page" title="Home">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg><span>Home</span>
+            </button>
+            <button class="porta-nav-item" type="button" data-app-nav="people" title="Search people">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><span>Search people</span>
+            </button>
+            <button class="porta-nav-item" type="button" data-app-nav="learn" title="Find a class">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3H20v16H5.5A2.5 2.5 0 0 0 3 21zM3 5.5v13A2.5 2.5 0 0 1 5.5 16H20M8 7h8M8 10h6"/></svg><span>Find a class</span>
+            </button>
+            <button class="porta-nav-item" type="button" data-app-nav="communities" title="Communities">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 20v-1.3a4.7 4.7 0 0 0-4.7-4.7H7.7A4.7 4.7 0 0 0 3 18.7V20"/><circle cx="9.5" cy="7.5" r="4.5"/><path d="M17 11a4 4 0 1 0-1-7.9M17 14h.3a3.7 3.7 0 0 1 3.7 3.7V20"/></svg><span>Communities</span>
+            </button>
+            <div class="sidebar-section-label" aria-hidden="true"><span>YOUR SPACE</span><i></i></div>
+            <button class="porta-nav-item" type="button" data-app-nav="chats" title="Chats">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-2 2v-7.5a7.5 7.5 0 1 1 17-2z"/><path d="M8 11h.01M12 11h.01M16 11h.01"/></svg><span>Chats</span>
+            </button>
+            <button class="porta-nav-item" type="button" data-app-nav="dashboard" title="Dashboard & Porta Pay">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></svg><span>Dashboard &amp; Porta Pay</span>
+            </button>
+            <button class="porta-nav-item" type="button" data-app-nav="profile" title="Profile">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span>Profile</span>
+            </button>
+          </nav>
+          <div class="sidebar-account">
+            <span class="sidebar-user-avatar" id="sidebar-user-avatar">P</span>
+            <span class="sidebar-account-name" id="sidebar-account-name">Your account</span>
+            <button id="theme-toggle" type="button" class="theme-toggle" title="Switch color theme" aria-label="Switch to dark mode">◐</button>
+            <button id="logout-button" type="button" class="logout-button" title="Log out" aria-label="Log out">↗</button>
+          </div>
+        </aside>
+        <div class="app-workspace">
+          <header class="app-topbar">
+            <div><span class="app-topbar-kicker">YOUR PORTA SPACE</span><h1 id="app-page-title">Home</h1></div>
+            <button type="button" class="app-topbar-profile" data-app-nav="profile"><span class="sidebar-user-avatar" id="topbar-user-avatar">P</span><span id="topbar-account-name">Your profile</span></button>
+          </header>
+          <section class="app-view active" id="view-home" data-app-panel="home" aria-labelledby="app-page-title">
+            <div class="feed-welcome"><div><span class="section-kicker">A PLACE TO FIND YOUR PEOPLE</span><h2>Good things start with a shared interest.</h2><p>Your feed will grow with posts and stories from people and communities on Porta.</p></div><span class="feed-welcome-art" aria-hidden="true">✳</span></div>
+            <section class="stories-panel" aria-labelledby="stories-heading"><div class="app-section-heading"><div><span class="section-kicker">A LITTLE WINDOW INTO EVERYONE’S DAY</span><h2 id="stories-heading">Stories</h2></div><span class="coming-soon-badge">READY FOR THE COMMUNITY</span></div><div class="stories-empty"><span class="stories-empty-icon" aria-hidden="true">＋</span><span><b>Your story circle starts here</b><small>Stories will show up here as members start sharing.</small></span></div></section>
+            <div class="feed-layout">
+              <section class="feed-column" aria-label="Community posts"><div class="feed-column-heading"><h2>Your feed</h2><span>Latest from your community</span></div><article class="empty-feed-card"><div class="empty-feed-icon" aria-hidden="true">✦</div><h3>Your feed is ready for its first post</h3><p>When Porta members share something, their posts will appear here. Until then, find people or explore a class.</p><div class="empty-feed-actions"><button class="button" type="button" data-app-nav="people">Find people <span aria-hidden="true">→</span></button><button class="quiet-app-button" type="button" data-app-nav="learn">Explore classes</button></div></article></section>
+              <aside class="feed-side-card"><span class="section-kicker">A COMMUNITY IN THE MAKING</span><h3>Porta grows with you.</h3><p>Meet people, trade skills, and make this space yours.</p><button type="button" class="quiet-app-button" data-app-nav="profile">Finish your profile <span aria-hidden="true">→</span></button></aside>
+            </div>
+          </section>
+          <section class="app-view" id="view-people" data-app-panel="people" hidden>
+            <div class="app-page-intro"><span class="section-kicker">FIND YOUR PEOPLE</span><h2>Search Porta</h2><p>Look up members by name or username and find someone who shares your interests.</p></div>
+            <form class="app-search-form" id="people-search-form"><label class="field-label" for="people-search-input">Name or username</label><div class="app-search-row"><span aria-hidden="true">⌕</span><input id="people-search-input" name="q" type="search" minlength="2" maxlength="60" autocomplete="off" placeholder="Try a name or @username"><button class="button" type="submit">Search <span aria-hidden="true">→</span></button></div></form>
+            <div class="people-search-results" id="people-search-results" aria-live="polite"><div class="app-empty-state compact"><span class="app-empty-icon" aria-hidden="true">⌕</span><h3>Who would you like to meet?</h3><p>Search by a name or username to find Porta members.</p></div></div>
+          </section>
+          <section class="app-view" id="view-communities" data-app-panel="communities" hidden>
+            <div class="community-hero"><div><span class="section-kicker">YOUR INTERESTS, WITH PEOPLE AROUND THEM</span><h2>Find your corner<br>of Porta.</h2><p>Communities are where shared interests become familiar faces, useful conversations, and things you make together.</p><div class="community-hero-meta"><span class="community-hero-dot"></span>Built around people, not just posts</div></div><div class="community-orbit" aria-hidden="true"><span class="orbit-chip chip-one">✳</span><span class="orbit-chip chip-two">Aa</span><span class="orbit-chip chip-three">◉</span><span class="orbit-center">p</span></div></div>
+            <div class="community-toolbar"><div><span class="section-kicker">MEET AROUND WHAT YOU LOVE</span><h2>Communities</h2></div><label class="community-filter"><span aria-hidden="true">⌕</span><input id="community-search" type="search" maxlength="50" placeholder="Find a topic"></label></div>
+            <div class="community-tabs" role="tablist" aria-label="Community lists"><button class="community-tab active" type="button" role="tab" aria-selected="true" data-community-tab="discover">Discover</button><button class="community-tab" type="button" role="tab" aria-selected="false" data-community-tab="yours">Your communities <span class="community-count">0</span></button></div>
+            <div class="community-content" id="community-discover" data-community-content="discover">
+              <div class="community-empty-banner"><span class="community-empty-icon" aria-hidden="true">✦</span><div><b>New spaces are just getting started</b><p>There aren’t any live communities yet. The topic cards below are ideas based on your interests—not existing groups.</p></div></div>
+              <div class="community-idea-heading"><div><h3>Spaces that could feel like you</h3><p>Pick an idea to see people with a shared interest as Porta grows.</p></div><span>IDEAS, NOT LIVE GROUPS</span></div>
+              <div class="community-idea-grid" id="community-ideas"></div>
+            </div>
+            <div class="community-content" id="community-yours" data-community-content="yours" hidden>
+              <div class="app-empty-state"><span class="app-empty-icon" aria-hidden="true">⌂</span><h3>Your communities will gather here</h3><p>When community spaces open and you join them, they’ll be easy to find in this list.</p></div>
+            </div>
+          </section>
+          <section class="app-view" id="view-learn" data-app-panel="learn" hidden>
+            <div class="app-page-intro"><span class="section-kicker">LEARN FROM EACH OTHER</span><h2>Find a class</h2><p>Choose a topic, language, and class type. Matching sessions will appear here as they’re created.</p></div>
+            <form class="class-search-card" id="class-search-form">
+              <div class="form-field"><label class="field-label" for="class-topic">What would you like to learn?</label><input id="class-topic" name="topic" maxlength="80" placeholder="For example, beginner Python"></div>
+              <div class="form-field"><label class="field-label" for="class-language">Language</label><select id="class-language" name="language"><option value="">Any language</option><option>Arabic</option><option>English</option><option>French</option><option>Hindi</option><option>Spanish</option><option>Urdu</option></select></div>
+              <fieldset class="class-visibility"><legend class="field-label">Class access</legend><label><input type="radio" name="visibility" value="any" checked> Public or private</label><label><input type="radio" name="visibility" value="public"> Public</label><label><input type="radio" name="visibility" value="private"> Private</label></fieldset>
+              <button class="button" type="submit">Show matching classes <span aria-hidden="true">→</span></button>
+            </form>
+            <div class="class-results" id="class-results" aria-live="polite"><div class="app-empty-state"><span class="app-empty-icon" aria-hidden="true">⌕</span><h3>Your next class is waiting to be created</h3><p>There aren’t any listed classes yet. As members start teaching, matching public and private classes will show up here.</p></div></div>
+          </section>
+          <section class="app-view" id="view-chats" data-app-panel="chats" hidden>
+            <div class="app-page-intro"><span class="section-kicker">KEEP THE CONVERSATION GOING</span><h2>Your chats</h2><p>Messages with people and communities will live here.</p></div>
+            <div class="app-empty-state"><span class="app-empty-icon" aria-hidden="true">♡</span><h3>No conversations yet</h3><p>Once you connect with someone on Porta, your chats will be easy to find here.</p><button class="button" type="button" data-app-nav="people">Find people <span aria-hidden="true">→</span></button></div>
+          </section>
+          <section class="app-view" id="view-dashboard" data-app-panel="dashboard" hidden>
+            <div class="app-page-intro"><span class="section-kicker">YOUR LEARNING, AT A GLANCE</span><h2>Dashboard &amp; Porta Pay</h2><p>Keep track of classes you teach, classes you take, and your Porta balance.</p></div>
+            <div class="dashboard-metrics"><article><span>Earned teaching</span><strong>QAR 0</strong><small>Your teaching earnings will appear here.</small></article><article><span>Spent learning</span><strong>QAR 0</strong><small>Your class payments will appear here.</small></article><article><span>Classes completed</span><strong>0</strong><small>Your learning and teaching activity.</small></article></div>
+            <section class="porta-pay-card"><div><span class="section-kicker">PORTA PAY</span><h3>Your balance</h3><p>There are no transactions yet. Payments will be recorded here when Porta Pay is connected.</p></div><strong>QAR 0.00</strong></section>
+            <div class="app-empty-state compact"><h3>Your activity will build here</h3><p>As you teach or join classes, your dashboard will keep a clear record of your progress.</p></div>
+          </section>
+          <section class="app-view profile-app-view" id="view-profile" data-app-panel="profile" hidden>
+            <div class="avatar-studio">
+              <div class="avatar-studio-heading"><div><span class="section-kicker">YOUR MINI-ME, YOUR RULES</span><h2>Build your Porta look.</h2><p>Make a character that feels like you—or like the person you want to show up as.</p></div><span class="studio-sparkle" aria-hidden="true">✳</span></div>
+              <div class="avatar-studio-body">
+                <div class="avatar-stage">
+                  <span class="avatar-stage-label">LIVE PREVIEW</span>
+                  <div class="avatar-preview" id="avatar-preview" aria-label="Your Porta avatar"></div>
+                  <span class="avatar-stage-caption">A little more you.</span>
+                  <div class="avatar-actions"><label class="button avatar-upload-button" for="profile-photo-upload">Upload a photo</label><input id="profile-photo-upload" type="file" accept="image/*" hidden><button type="button" class="quiet-app-button" id="remove-profile-photo" hidden>Use avatar</button></div>
+                </div>
+                <div class="avatar-customizer">
+                  <div class="avatar-mode-tabs" role="tablist" aria-label="Avatar options"><button class="avatar-mode-tab active" type="button" role="tab" aria-selected="true" data-avatar-mode="face">Face</button><button class="avatar-mode-tab" type="button" role="tab" aria-selected="false" data-avatar-mode="hair">Hair</button><button class="avatar-mode-tab" type="button" role="tab" aria-selected="false" data-avatar-mode="style">Style</button></div>
+                  <form class="avatar-maker" id="avatar-maker">
+                    <div class="avatar-option-group active" data-avatar-group="face"><fieldset class="avatar-choice-field"><legend>Skin tone</legend><div class="avatar-swatches" id="avatar-skin-options"></div></fieldset><fieldset class="avatar-choice-field"><legend>Face shape</legend><div class="avatar-choice-row" id="avatar-face-options"></div></fieldset><fieldset class="avatar-choice-field"><legend>Eyes</legend><div class="avatar-choice-row" id="avatar-eye-options"></div></fieldset><fieldset class="avatar-choice-field"><legend>Expression</legend><div class="avatar-choice-row" id="avatar-expression-options"></div></fieldset></div>
+                    <div class="avatar-option-group" data-avatar-group="hair" hidden><fieldset class="avatar-choice-field"><legend>Hair style</legend><div class="avatar-choice-row avatar-style-options" id="avatar-hair-options"></div></fieldset><fieldset class="avatar-choice-field"><legend>Hair color</legend><div class="avatar-swatches" id="avatar-hair-color-options"></div></fieldset><fieldset class="avatar-choice-field"><legend>Extras</legend><div class="avatar-choice-row" id="avatar-accessory-options"></div></fieldset></div>
+                    <div class="avatar-option-group" data-avatar-group="style" hidden><fieldset class="avatar-choice-field"><legend>Outfit</legend><div class="avatar-choice-row" id="avatar-outfit-options"></div></fieldset><fieldset class="avatar-choice-field"><legend>Outfit color</legend><div class="avatar-swatches" id="avatar-outfit-color-options"></div></fieldset><fieldset class="avatar-choice-field"><legend>Background</legend><div class="avatar-swatches" id="avatar-background-options"></div></fieldset></div>
+                    <div class="avatar-studio-actions"><button class="avatar-randomize" type="button" id="avatar-randomize">⤨ &nbsp; Surprise me</button><button class="button" type="submit">Save my look <span aria-hidden="true">→</span></button></div>
+                  </form>
+                </div>
+              </div>
+              <p class="avatar-feedback" id="avatar-feedback" role="status" aria-live="polite"></p>
+            </div>
+            <div id="profile-view-container"></div>
+            <div class="profile-account-details">
+              <div><span>Account email</span><b id="account-email-detail"></b><small>Email changes aren’t available in this prototype.</small></div>
+              <div><span>Phone number</span><b id="account-phone-detail"></b><small>Verified contact details are protected.</small></div>
+            </div>
+            <p class="avatar-feedback" id="avatar-feedback" role="status" aria-live="polite"></p>
+          </section>
+        </div>
+      </section>
+      <section class="member-welcome section-wrap"><div><div class="section-kicker"><span class="live-dot"></span> YOUR PORTA SPACE</div><h2>Hey, <span id="welcome-name">friend</span>. What are you curious about?</h2><p>Your profile is ready. Pick a skill to explore, or tell Porta what you’d like to learn next.</p></div><div class="welcome-avatar" id="welcome-avatar">P</div></section>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="live-dot"></span> A new way to learn in Qatar</div>
+          <h1>What if your next great teacher was <span>a lot like you?</span></h1>
+          <p class="hero-description">Meet people who are learning what you want to learn—and share what you already know. That’s Porta. Learning works better together.</p>
+          <div class="hero-actions">
+            <a class="button" href="#discover">Explore learning paths <span aria-hidden="true">→</span></a>
+            <a class="quiet-link" href="#how-it-works">Get to know Porta <span aria-hidden="true">↓</span></a>
+          </div>
+          <p class="hero-note"><svg viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M9 2.2 15 4v4.3c0 3.6-2.5 6.2-6 7.5-3.5-1.3-6-3.9-6-7.5V4l6-1.8Z" stroke="currentColor" stroke-width="1.4"/><path d="m6.6 8.8 1.6 1.6 3.4-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg> A profile built around what you want to learn and share.</p>
+        </div>
+        <div class="hero-visual" aria-label="Illustration of learners sharing ideas">
+          <div class="sun-disc"></div><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+          <div class="learning-card"><div class="card-topline"><span class="card-dot"></span> LEARNING, TOGETHER</div><p>“You bring the questions.<br>I’ll bring the coffee.”</p><div class="card-people"><span class="person-bubble person-a">A</span><span class="person-bubble person-b">M</span><span class="card-caption">Good things are learned together</span></div></div>
+          <div class="floating-label label-skill"><span class="label-icon label-language">Aa</span><span><b>Share a language</b><small>One phrase at a time</small></span></div>
+          <div class="floating-label label-skill-two"><span class="label-icon label-code">&lt;/&gt;</span><span><b>Pick up a new skill</b><small>Learn by doing</small></span></div>
+          <div class="hero-spark spark-one">✳</div><div class="hero-spark spark-two">✦</div>
+        </div>
+      </section>
+
+      <section class="ticker" aria-label="Skills you can share"><span>Learn a language</span><i>✳</i><span>Try your first line of code</span><i>✳</i><span>Make sense of a tough subject</span><i>✳</i><span>Pass on what you know</span><i>✳</i></section>
+
+      <section class="intro section-wrap" id="how-it-works">
+        <div class="section-kicker">THE PORTA IDEA</div>
+        <div class="intro-grid">
+          <h2>There’s more than one way to be a teacher.</h2>
+          <div class="intro-copy"><p>Sometimes, you just need someone who remembers what it’s like to be learning it for the first time. Porta makes it easier to find that person.</p><p>Come to learn something. Come to share something. You can do both.</p></div>
+        </div>
+        <div class="principles">
+          <article class="principle"><div class="principle-icon mint-icon">01</div><h3>People teach people</h3><p>Learn one-on-one from peers with real experience—not another anonymous course.</p></article>
+          <article class="principle"><div class="principle-icon peach-icon">02</div><h3>Everyone brings something</h3><p>Be a learner today; share your skills tomorrow. No expert badge required.</p></article>
+          <article class="principle"><div class="principle-icon lilac-icon">03</div><h3>AI helps you get going</h3><p>A little help finding your next step. Real people stay at the heart of learning.</p></article>
+        </div>
+      </section>
+
+      <section class="discover-band" id="discover">
+        <div class="section-wrap discover-layout">
+          <div class="discover-copy"><div class="section-kicker">A WORLD OF “I’VE GOT THIS”</div><h2>Start wherever<br>your curiosity takes you.</h2><p>See something that sounds interesting? That’s a good place to start.</p><div class="discover-small">These are learning ideas—not live tutor listings yet.</div></div>
+          <div class="skill-board" id="skill-board" aria-label="Example learning topics"></div>
+        </div>
+      </section>
+
+      <section class="match-section section-wrap">
+        <div class="match-heading"><div><div class="section-kicker">A LITTLE MACHINE LEARNING</div><h2>Tell Porta what’s on your mind.</h2><p>Our local matcher compares your interests with learning topics and suggests where to begin.</p></div><div class="ml-badge"><span>✳</span> TF-IDF interest matcher</div></div>
+        <form id="match-form" class="match-form">
+          <label class="field-label" for="match-goal">What are you curious about?</label>
+          <div class="match-input-row"><input id="match-goal" name="goal" maxlength="300" placeholder="Try: I want to build a website, speak Arabic, understand AI..." autocomplete="off"><button class="button" type="submit">Find my starting points <span aria-hidden="true">→</span></button></div>
+          <p class="field-note">Matches are based on text similarity, not a prediction of your ability or success.</p>
+        </form>
+        <div id="match-results" class="match-results" aria-live="polite"></div>
+      </section>
+
+      <section class="ai-section" id="ai">
+        <div class="section-wrap ai-layout">
+          <div class="ai-copy"><div class="section-kicker">MEET YOUR AI SIDEKICK</div><h2>A starting point,<br>not the whole story.</h2><p>Porta’s AI coach can help turn a learning goal into a few practical next steps. Then you can find a person to work through them with.</p><div class="ai-trust"><span>✳</span><div><b>Human connection first</b><small>AI supports learning. It doesn’t replace your learning buddy.</small></div></div></div>
+          <div class="coach-card">
+            <div class="coach-header"><div class="coach-avatar">✳</div><div><b>Porta learning coach</b><span>Make a plan for your curiosity</span></div><div class="coach-status" id="coach-status">CHECKING</div></div>
+            <form id="coach-form"><label class="field-label" for="coach-goal">What would you like to learn?</label><textarea id="coach-goal" maxlength="500" minlength="8" placeholder="I want to learn enough Python to make a simple game..." required></textarea><button class="button coach-button" type="submit">Make me a learning plan <span aria-hidden="true">✦</span></button></form>
+            <p class="privacy-note" id="coach-privacy">Your goal is only sent to the configured AI provider when you ask for a plan.</p>
+            <div id="coach-output" class="coach-output" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+
+        <section class="profile-section section-wrap" id="profile">
+          <div class="profile-section-heading"><div class="section-kicker">YOUR PLACE ON PORTA</div><h2>This is <span id="profile-name-heading">your</span> profile.</h2><p>A little snapshot of what you want to learn and share. Your learning story is yours to shape.</p></div>
+          <div id="profile-card" class="profile-card" aria-live="polite"></div>
+          <button class="profile-edit-button" id="edit-profile-button" type="button">Edit my profile <span aria-hidden="true">↗</span></button>
+          <form id="edit-profile-form" class="edit-profile-form" hidden>
+            <div class="edit-profile-heading"><h3>Update your learning profile</h3><button id="cancel-profile-edit" type="button" aria-label="Cancel profile edits">×</button></div>
+            <fieldset class="question-field"><legend class="field-label">On Porta, I’d like to… <span>*</span></legend><div class="choice-chips role-chips">
+              <label class="choice-chip"><input type="radio" name="role" value="learner"><span>Learn something</span></label>
+              <label class="choice-chip"><input type="radio" name="role" value="peer_tutor"><span>Share what I know</span></label>
+              <label class="choice-chip"><input type="radio" name="role" value="both"><span>A bit of both</span></label>
+            </div></fieldset>
+            <div class="register-grid profile-extra">
+              <div class="form-field"><label class="field-label" for="edit-first-name">First name <span>*</span></label><input id="edit-first-name" name="first_name" required minlength="1" maxlength="40"></div>
+              <div class="form-field"><label class="field-label" for="edit-last-name">Last name <span>*</span></label><input id="edit-last-name" name="last_name" required minlength="1" maxlength="40"></div>
+              <div class="form-field form-field-wide"><label class="field-label" for="edit-username">Username <span>*</span></label><input id="edit-username" name="username" required minlength="3" maxlength="30" pattern="[A-Za-z0-9_.]+" autocomplete="username"></div>
+            </div>
+            <div class="form-field"><label class="field-label" for="edit-interests-input">What are you curious about? <span>*</span></label><div class="tag-entry" data-tag-input data-name="interests" data-suggestions="AI,Arabic,art,books,business,cinema,content creation,cooking,creative writing,design,entrepreneurship,film,fitness,gaming,graphic design,history,languages,marketing,math,music,photography,podcasts,programming,psychology,Python,science,sports,startups,technology,travel,video editing,web development"><div class="tag-values" aria-live="polite"></div><input class="tag-input-control" id="edit-interests-input" autocomplete="off" placeholder="Add an interest..." aria-label="Add an interest" aria-autocomplete="list" aria-expanded="false" aria-controls="edit-interests-suggestions" role="combobox"><div class="suggestion-list" id="edit-interests-suggestions" role="listbox" hidden></div></div></div>
+            <div class="form-field edit-share-skills" id="edit-share-skills-field" hidden><label class="field-label" for="edit-skills-input">Skills you can share <span>*</span></label><div class="tag-entry" data-tag-input data-name="skills_to_share" data-suggestions="AI,Arabic,art,baking,business,chemistry,coding,design,English,fitness,graphic design,math,music,photography,Python,science,social media,Spanish,video editing,web development,writing"><div class="tag-values" aria-live="polite"></div><input class="tag-input-control" id="edit-skills-input" autocomplete="off" placeholder="Add a skill..." aria-label="Add a skill you can share" aria-autocomplete="list" aria-expanded="false" aria-controls="edit-skills-suggestions" role="combobox"><div class="suggestion-list" id="edit-skills-suggestions" role="listbox" hidden></div></div></div>
+            <div class="register-grid profile-extra">
+              <div class="form-field form-field-wide"><label class="field-label" for="edit-goals-input">Things I want to explore</label><div class="tag-entry" data-tag-input data-name="learning_goals" data-suggestions="AI,Arabic,biology,business,chemistry,design,English,finance,history,JavaScript,math,photography,Python,public speaking,science,Spanish,web development"><div class="tag-values" aria-live="polite"></div><input class="tag-input-control" id="edit-goals-input" autocomplete="off" placeholder="Add a topic or skill..." aria-label="Add something you want to explore" aria-autocomplete="list" aria-expanded="false" aria-controls="edit-goals-suggestions" role="combobox"><div class="suggestion-list" id="edit-goals-suggestions" role="listbox" hidden></div></div></div>
+              <div class="form-field"><label class="field-label" for="edit-location">Where are you based? <span>*</span></label><input id="edit-location" name="location" required minlength="2" maxlength="80"></div>
+              <div class="form-field"><label class="field-label" for="edit-languages-input">Languages you’re comfortable in <span>*</span></label><div class="tag-entry" data-tag-input data-name="languages" data-limit="3" data-suggestions="Arabic,English,French,German,Hindi,Italian,Japanese,Korean,Malayalam,Mandarin,Portuguese,Punjabi,Russian,Spanish,Swahili,Tagalog,Turkish,Urdu"><div class="tag-values" aria-live="polite"></div><input class="tag-input-control" id="edit-languages-input" autocomplete="off" placeholder="Add a language..." aria-label="Add a language you are comfortable in" aria-autocomplete="list" aria-expanded="false" aria-controls="edit-languages-suggestions" role="combobox"><div class="suggestion-list" id="edit-languages-suggestions" role="listbox" hidden></div></div></div>
+            </div>
+            <fieldset class="question-field"><legend class="field-label">How do you like learning? <small>Optional</small></legend><div class="choice-chips style-chips">
+              <label class="choice-chip"><input type="radio" name="learning_style" value="one_to_one"><span>One to one</span></label>
+              <label class="choice-chip"><input type="radio" name="learning_style" value="small_group"><span>Small group</span></label>
+              <label class="choice-chip"><input type="radio" name="learning_style" value="flexible"><span>Either works</span></label>
+            </div></fieldset>
+            <div class="form-field edit-bio"><label class="field-label" for="edit-bio">A little about you</label><textarea id="edit-bio" name="bio" maxlength="240" rows="2" placeholder="Tell your learning buddies a little about yourself…"></textarea></div>
+            <p class="auth-feedback" id="edit-profile-feedback" role="alert" aria-live="polite"></p>
+            <div class="edit-profile-actions"><button class="button" type="submit">Save my profile <span aria-hidden="true">→</span></button><button class="cancel-edit-link" id="cancel-profile-edit-link" type="button">Cancel</button></div>
+          </form>
+          <div class="profile-privacy" id="privacy"><span class="privacy-icon">♡</span><p>Your password is stored as a secure hash, never as readable text. Your profile stays on the server running this prototype.</p></div>
+        </section>
+    </main>
+    <footer class="site-footer"><a class="brand footer-brand" href="#"><span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M6 26V11a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v15M11 26v-7a5 5 0 0 1 10 0v7M4 26h24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="brand-word">porta</span></a><span>Come curious. Leave connected.</span><a href="#profile">Your Porta profile ↑</a></footer>
+  </body>
+</html>

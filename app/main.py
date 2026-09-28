@@ -1,0 +1,1866 @@
+from __future__ import annotations
+
+import json
+import hashlib
+import logging
+import os
+import re
+import secrets
+import smtplib
+import sqlite3
+import ssl
+import hmac
+import urllib.error
+import urllib.request
+from collections.abc import Mapping
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, contextmanager
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from pathlib import Path
+from typing import Annotated, Iterator, Literal
+from urllib.parse import urlparse
+
+from authlib.integrations.base_client.errors import MismatchingStateError, OAuthError
+from authlib.integrations.starlette_client import OAuth
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+from pydantic import BaseModel, Field, field_validator, model_validator
+from dotenv import load_dotenv
+import phonenumbers
+
+from app.ai_coach import (
+    CoachProviderError,
+    CoachUnavailableError,
+    create_learning_plan,
+    is_configured,
+)
+from app.catalog import LEARNING_PATHS
+from app.recommender import recommend_paths
+
+ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT / ".env", override=False)
+logger = logging.getLogger(__name__)
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+AccountRole = Literal["learner", "peer_tutor", "both"]
+LearningStyle = Literal["one_to_one", "small_group", "flexible"]
+TOKEN_LIFETIME = timedelta(days=30)
+PASSWORD_ITERATIONS = 600_000
+RESET_TOKEN_LIFETIME = timedelta(minutes=30)
+RESET_REQUEST_COOLDOWN = timedelta(minutes=1)
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+LINKEDIN_CLIENT_ID = os.environ.get("LINKEDIN_CLIENT_ID", "").strip()
+LINKEDIN_CLIENT_SECRET = os.environ.get("LINKEDIN_CLIENT_SECRET", "").strip()
+OAUTH_EXCHANGE_LIFETIME = timedelta(minutes=2)
+VERIFICATION_CODE_LIFETIME = timedelta(minutes=10)
+VERIFICATION_RESEND_COOLDOWN = timedelta(seconds=60)
+VERIFICATION_MAX_ATTEMPTS = 5
+VERIFICATION_CODE_ITERATIONS = 120_000
+
+@contextmanager
+def database() -> Iterator[sqlite3.Connection]:
+    configured_path = os.environ.get("PORTA_DB_PATH")
+    db_path = Path(configured_path) if configured_path else ROOT / "data" / "porta.sqlite3"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(db_path, timeout=5)
+    try:
+        os.chmod(db_path, 0o600)
+        connection.execute("PRAGMA busy_timeout = 5000")
+        yield connection
+        connection.commit()
+    except sqlite3.Error:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def initialize_database() -> None:
+    with database() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                full_name TEXT NOT NULL,
+                email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                password_salt TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('learner', 'peer_tutor', 'both')),
+                interests TEXT NOT NULL,
+                skills_to_share TEXT NOT NULL,
+                learning_goal TEXT NOT NULL,
+                learning_style TEXT NOT NULL,
+                location TEXT NOT NULL,
+                language TEXT NOT NULL,
+                bio TEXT NOT NULL,
+                policies_accepted_at TEXT NOT NULL DEFAULT '',
+                first_name TEXT NOT NULL DEFAULT '',
+                last_name TEXT NOT NULL DEFAULT '',
+                username TEXT NOT NULL DEFAULT '',
+                phone_number TEXT NOT NULL DEFAULT '',
+                learning_goals TEXT NOT NULL DEFAULT '[]',
+                phone_verified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        account_columns = {
+            column[1] for column in connection.execute("PRAGMA table_info(accounts)").fetchall()
+        }
+        if "policies_accepted_at" not in account_columns:
+            connection.execute(
+                "ALTER TABLE accounts ADD COLUMN policies_accepted_at TEXT NOT NULL DEFAULT ''"
+            )
+        for column, definition in (
+            ("first_name", "TEXT NOT NULL DEFAULT ''"),
+            ("last_name", "TEXT NOT NULL DEFAULT ''"),
+            ("username", "TEXT NOT NULL DEFAULT ''"),
+            ("phone_number", "TEXT NOT NULL DEFAULT ''"),
+            ("learning_goals", "TEXT NOT NULL DEFAULT '[]'"),
+            ("phone_verified", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in account_columns:
+                connection.execute(f"ALTER TABLE accounts ADD COLUMN {column} {definition}")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_unique "
+            "ON accounts(username COLLATE NOCASE) WHERE username != ''"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS oauth_identities (
+                provider TEXT NOT NULL,
+                provider_subject TEXT NOT NULL,
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                PRIMARY KEY (provider, provider_subject),
+                UNIQUE (provider, account_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS oauth_exchange_codes (
+                code_hash TEXT PRIMARY KEY,
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                token_hash TEXT PRIMARY KEY,
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                token_hash TEXT PRIMARY KEY,
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_reset_requests (
+                email_hash TEXT PRIMARY KEY,
+                requested_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_registrations (
+                verification_id TEXT PRIMARY KEY,
+                email TEXT NOT NULL COLLATE NOCASE,
+                username TEXT NOT NULL COLLATE NOCASE,
+                payload TEXT NOT NULL,
+                stage TEXT NOT NULL CHECK (stage IN ('phone', 'email')),
+                code_hash TEXT NOT NULL,
+                code_salt TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                last_sent_at TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        pending_columns = {
+            column[1] for column in connection.execute("PRAGMA table_info(pending_registrations)").fetchall()
+        }
+        if "account_id" not in pending_columns:
+            connection.execute(
+                "ALTER TABLE pending_registrations ADD COLUMN account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE"
+            )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS pending_registration_email_unique "
+            "ON pending_registrations(email COLLATE NOCASE)"
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS pending_registration_username_unique "
+            "ON pending_registrations(username COLLATE NOCASE)"
+        )
+        connection.execute(
+            "DELETE FROM pending_registrations WHERE expires_at <= ?",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    initialize_database()
+    yield
+
+
+def oauth_configuration() -> dict[str, dict[str, object]]:
+    return {
+        "google": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "server_metadata_url": "https://accounts.google.com/.well-known/openid-configuration",
+            "client_kwargs": {
+                "scope": "openid email profile",
+                "token_endpoint_auth_method": "client_secret_post",
+                "code_challenge_method": "S256",
+            },
+        },
+        "linkedin": {
+            "client_id": LINKEDIN_CLIENT_ID,
+            "client_secret": LINKEDIN_CLIENT_SECRET,
+            "server_metadata_url": "https://www.linkedin.com/oauth/.well-known/openid-configuration",
+            "client_kwargs": {
+                "scope": "openid profile email",
+                "token_endpoint_auth_method": "client_secret_post",
+                "code_challenge_method": "S256",
+            },
+        },
+    }
+
+
+oauth = OAuth()
+for provider_name, configuration in oauth_configuration().items():
+    oauth.register(name=provider_name, **configuration)
+
+app = FastAPI(
+    title="Porta",
+    description="A peer-learning community, starting in Qatar.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("PORTA_SESSION_SECRET") or secrets.token_urlsafe(32),
+    same_site="lax",
+    https_only=os.environ.get("PORTA_COOKIE_SECURE", "").lower() in {"true", "1", "yes"}
+    or os.environ.get("PORTA_PUBLIC_URL", "").lower().startswith("https://"),
+)
+app.mount("/assets", StaticFiles(directory=ROOT / "static"), name="assets")
+
+
+@app.middleware("http")
+async def use_configured_local_oauth_origin(request: Request, call_next):
+    public_url = urlparse(
+        os.environ.get("PORTA_PUBLIC_URL", "http://localhost:8000").strip()
+    )
+    request_host = request.url.hostname
+    local_hosts = {"localhost", "127.0.0.1"}
+    oauth_paths = {
+        "/",
+        "/api/auth/google",
+        "/api/auth/google/callback",
+        "/api/auth/linkedin",
+        "/api/auth/linkedin/callback",
+    }
+    if (
+        request.url.path in oauth_paths
+        and request_host in local_hosts
+        and public_url.hostname in local_hosts
+        and request_host != public_url.hostname
+        and public_url.netloc
+        and not public_url.username
+        and not public_url.password
+    ):
+        destination = f"{public_url.scheme}://{public_url.netloc}{request.url.path}"
+        if request.url.query:
+            destination = f"{destination}?{request.url.query}"
+        return RedirectResponse(destination, status_code=307)
+    return await call_next(request)
+
+
+class ProfileFields(BaseModel):
+    full_name: Annotated[str, Field(min_length=2, max_length=80)]
+    email: Annotated[str, Field(min_length=5, max_length=254)]
+    role: AccountRole
+    interests: Annotated[list[str], Field(min_length=1)]
+    skills_to_share: list[str] = Field(default_factory=list)
+    learning_goals: list[str] = Field(default_factory=list)
+    learning_goal: Annotated[str, Field(max_length=300)] = ""
+    learning_style: LearningStyle = "flexible"
+    location: Annotated[str, Field(min_length=2, max_length=80)] = "Doha, Qatar"
+    language: Annotated[str, Field(min_length=2, max_length=60)] = "English"
+    bio: Annotated[str, Field(max_length=240)] = ""
+
+    @field_validator("full_name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if len(cleaned) < 2:
+            raise ValueError("Please enter your name.")
+        return cleaned
+
+    @field_validator("email")
+    @classmethod
+    def clean_email(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if not EMAIL_PATTERN.fullmatch(cleaned):
+            raise ValueError("Enter a valid email address.")
+        return cleaned
+
+    @field_validator("interests")
+    @classmethod
+    def clean_interests(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(" ".join(value.split())[:60] for value in values if value.strip()))
+
+    @field_validator("skills_to_share")
+    @classmethod
+    def clean_skills(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(" ".join(value.split())[:60] for value in values if value.strip()))
+
+    @field_validator("learning_goals")
+    @classmethod
+    def clean_learning_goals(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(" ".join(value.split())[:60] for value in values if value.strip()))
+
+    @field_validator("learning_goal")
+    @classmethod
+    def clean_goal(cls, value: str) -> str:
+        return " ".join(value.split())
+
+    @field_validator("location", "language")
+    @classmethod
+    def clean_short_text(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if len(cleaned) < 2:
+            raise ValueError("Please enter at least two characters.")
+        return cleaned
+
+    @field_validator("bio")
+    @classmethod
+    def clean_bio(cls, value: str) -> str:
+        return " ".join(value.split())
+
+    @model_validator(mode="after")
+    def require_teaching_skill(self) -> "ProfileFields":
+        if not self.interests:
+            raise ValueError("Choose at least one thing you are curious about.")
+        if self.role in {"peer_tutor", "both"} and not self.skills_to_share:
+            raise ValueError("Add at least one skill you would like to share.")
+        return self
+
+
+class AccountCreate(ProfileFields):
+    first_name: Annotated[str, Field(min_length=1, max_length=40)]
+    last_name: Annotated[str, Field(min_length=1, max_length=40)]
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    phone_number: Annotated[str, Field(min_length=7, max_length=24)]
+    languages: Annotated[list[str], Field(min_length=1, max_length=3)]
+    password: Annotated[str, Field(min_length=10, max_length=128)]
+    password_confirmation: Annotated[str, Field(min_length=10, max_length=128)]
+    policies_accepted: Literal[True]
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def clean_person_name(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("Enter your first and last name.")
+        return cleaned
+
+    @field_validator("username")
+    @classmethod
+    def clean_username(cls, value: str) -> str:
+        cleaned = value.strip().lstrip("@")
+        if not re.fullmatch(r"[A-Za-z0-9_.]{3,30}", cleaned):
+            raise ValueError("Usernames must be 3–30 characters using letters, numbers, dots, or underscores.")
+        return cleaned
+
+    @field_validator("phone_number")
+    @classmethod
+    def clean_phone_number(cls, value: str) -> str:
+        try:
+            parsed = phonenumbers.parse(value, None)
+        except phonenumbers.NumberParseException as error:
+            raise ValueError("Enter a valid phone number with its country calling code.") from error
+        if not phonenumbers.is_possible_number(parsed):
+            raise ValueError("Enter a valid phone number with its country calling code.")
+        return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+    @field_validator("languages")
+    @classmethod
+    def clean_languages(cls, values: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(" ".join(value.split())[:60] for value in values if value.strip()))
+        if not cleaned or len(cleaned) > 3:
+            raise ValueError("Choose between 1 and 3 languages.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def passwords_match(self) -> "AccountCreate":
+        if self.password != self.password_confirmation:
+            raise ValueError("Your passwords do not match.")
+        return self
+
+
+class RegistrationVerificationRequest(BaseModel):
+    verification_id: Annotated[str, Field(min_length=32, max_length=128)]
+    code: Annotated[str, Field(pattern=r"^[0-9]{6}$")]
+
+
+class RegistrationResendRequest(BaseModel):
+    verification_id: Annotated[str, Field(min_length=32, max_length=128)]
+
+
+class ProfileUpdateFields(BaseModel):
+    role: AccountRole
+    interests: Annotated[list[str], Field(min_length=1)]
+    skills_to_share: list[str] = Field(default_factory=list)
+    learning_goals: list[str] = Field(default_factory=list)
+    learning_goal: Annotated[str, Field(max_length=300)] = ""
+    first_name: Annotated[str, Field(max_length=40)] = ""
+    last_name: Annotated[str, Field(max_length=40)] = ""
+    username: Annotated[str, Field(max_length=30)] = ""
+    phone_number: Annotated[str, Field(max_length=24)] = ""
+    languages: Annotated[list[str], Field(max_length=3)] = Field(default_factory=list)
+    learning_style: LearningStyle = "flexible"
+    location: Annotated[str, Field(min_length=2, max_length=80)] = "Doha, Qatar"
+    language: Annotated[str, Field(min_length=2, max_length=60)] = "English"
+    bio: Annotated[str, Field(max_length=240)] = ""
+
+    @field_validator("interests", "skills_to_share", "learning_goals", "languages")
+    @classmethod
+    def clean_skill_list(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(" ".join(value.split())[:60] for value in values if value.strip()))
+
+    @field_validator("learning_goal")
+    @classmethod
+    def clean_goal(cls, value: str) -> str:
+        return " ".join(value.split())
+
+    @field_validator("location", "language")
+    @classmethod
+    def clean_short_text(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if len(cleaned) < 2:
+            raise ValueError("Please enter at least two characters.")
+        return cleaned
+
+    @field_validator("username")
+    @classmethod
+    def clean_optional_username(cls, value: str) -> str:
+        if not value:
+            return value
+        cleaned = value.strip().lstrip("@")
+        if not re.fullmatch(r"[A-Za-z0-9_.]{3,30}", cleaned):
+            raise ValueError("Usernames must be 3–30 characters using letters, numbers, dots, or underscores.")
+        return cleaned
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def clean_optional_name(cls, value: str) -> str:
+        return " ".join(value.split())
+
+    @field_validator("phone_number")
+    @classmethod
+    def clean_optional_phone(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if cleaned and (
+            not re.fullmatch(r"\+?[0-9 ()-]{7,23}", cleaned)
+            or sum(char.isdigit() for char in cleaned) < 7
+        ):
+            raise ValueError("Enter a valid phone number with at least 7 digits.")
+        return cleaned
+
+    @field_validator("bio")
+    @classmethod
+    def clean_bio(cls, value: str) -> str:
+        return " ".join(value.split())
+
+    @model_validator(mode="after")
+    def require_teaching_skill(self) -> "ProfileUpdateFields":
+        if not self.interests:
+            raise ValueError("Choose at least one thing you are curious about.")
+        if self.role in {"peer_tutor", "both"} and not self.skills_to_share:
+            raise ValueError("Add at least one skill you would like to share.")
+        return self
+
+
+class AccountUpdate(BaseModel):
+    profile: ProfileUpdateFields
+    policies_accepted: bool = False
+
+
+class PhoneVerificationStartRequest(BaseModel):
+    profile: ProfileUpdateFields
+    policies_accepted: Literal[True]
+
+
+class LoginRequest(BaseModel):
+    email: Annotated[str, Field(min_length=5, max_length=254)]
+    password: Annotated[str, Field(min_length=1, max_length=128)]
+
+    @field_validator("email")
+    @classmethod
+    def clean_email(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if not EMAIL_PATTERN.fullmatch(cleaned):
+            raise ValueError("Enter a valid email address.")
+        return cleaned
+
+
+class PasswordResetRequest(BaseModel):
+    email: Annotated[str, Field(min_length=5, max_length=254)]
+
+    @field_validator("email")
+    @classmethod
+    def clean_email(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if not EMAIL_PATTERN.fullmatch(cleaned):
+            raise ValueError("Enter a valid email address.")
+        return cleaned
+
+
+class PasswordResetConfirm(BaseModel):
+    token: Annotated[str, Field(min_length=32, max_length=128)]
+    new_password: Annotated[str, Field(min_length=10, max_length=128)]
+
+
+class PasswordResetEmailConfigurationError(Exception):
+    """Raised when Porta's outgoing reset email is not configured."""
+
+
+def is_password_reset_configured() -> bool:
+    required_settings = ("PORTA_SMTP_HOST", "PORTA_SMTP_FROM")
+    if not all(os.environ.get(setting, "").strip() for setting in required_settings):
+        return False
+    if bool(os.environ.get("PORTA_SMTP_USERNAME", "").strip()) != bool(
+        os.environ.get("PORTA_SMTP_PASSWORD", "")
+    ):
+        return False
+    try:
+        if int(os.environ.get("PORTA_SMTP_PORT", "465")) not in {465, 587}:
+            return False
+    except ValueError:
+        return False
+    public_url = os.environ.get("PORTA_PUBLIC_URL", "http://localhost:8000").strip()
+    parsed_url = urlparse(public_url)
+    return bool(parsed_url.netloc) and (
+        parsed_url.scheme == "https" or parsed_url.hostname in {"localhost", "127.0.0.1"}
+    ) and not parsed_url.username and not parsed_url.password
+
+
+def send_password_reset_email(recipient: str, token: str) -> None:
+    if not is_password_reset_configured():
+        raise PasswordResetEmailConfigurationError(
+            "Password reset email is not configured. Ask the site administrator to set up SMTP."
+        )
+
+    smtp_host = os.environ["PORTA_SMTP_HOST"].strip()
+    sender = os.environ["PORTA_SMTP_FROM"].strip()
+    smtp_port = int(os.environ.get("PORTA_SMTP_PORT", "465"))
+    if smtp_port not in {465, 587}:
+        raise PasswordResetEmailConfigurationError("The SMTP port configuration is invalid.")
+
+    public_url = os.environ.get("PORTA_PUBLIC_URL", "http://localhost:8000").strip().rstrip("/")
+    parsed_url = urlparse(public_url)
+    if parsed_url.scheme != "https" and parsed_url.hostname not in {"localhost", "127.0.0.1"}:
+        raise PasswordResetEmailConfigurationError("The public Porta URL must use HTTPS.")
+    if not parsed_url.netloc or parsed_url.username or parsed_url.password:
+        raise PasswordResetEmailConfigurationError("The public Porta URL is invalid.")
+    reset_url = f"{public_url}/#reset={token}"
+
+    message = EmailMessage()
+    message["Subject"] = "Reset your Porta password"
+    message["From"] = sender
+    message["To"] = recipient
+    message.set_content(
+        "We received a request to reset your Porta password.\n\n"
+        f"Choose a new password using this one-time link:\n{reset_url}\n\n"
+        "This link expires in 30 minutes. If you did not request a reset, "
+        "you can ignore this email. Your password will not change unless the "
+        "link is used.\n"
+    )
+    context = ssl.create_default_context()
+    smtp_connection = (
+        smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=15)
+        if smtp_port == 465
+        else smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+    )
+    with smtp_connection as server:
+        if smtp_port == 587:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+        username = os.environ.get("PORTA_SMTP_USERNAME", "").strip()
+        password = os.environ.get("PORTA_SMTP_PASSWORD", "")
+        if username or password:
+            if not username or not password:
+                raise PasswordResetEmailConfigurationError(
+                    "Configure both the SMTP username and password, or leave both empty."
+                )
+            server.login(username, password)
+        server.send_message(message)
+
+
+class VerificationDeliveryError(Exception):
+    pass
+
+
+def new_verification_code() -> tuple[str, str, str]:
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        code.encode("ascii"),
+        bytes.fromhex(salt),
+        VERIFICATION_CODE_ITERATIONS,
+    ).hex()
+    return code, salt, digest
+
+
+def verification_code_matches(code: str, salt: str, expected_digest: str) -> bool:
+    actual_digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        code.encode("ascii"),
+        bytes.fromhex(salt),
+        VERIFICATION_CODE_ITERATIONS,
+    ).hex()
+    return hmac.compare_digest(actual_digest, expected_digest)
+
+
+def is_whatsapp_verification_configured() -> bool:
+    phone_number_id = os.environ.get("PORTA_WHATSAPP_PHONE_NUMBER_ID", "").strip()
+    access_token = os.environ.get("PORTA_WHATSAPP_ACCESS_TOKEN", "").strip()
+    template_name = os.environ.get("PORTA_WHATSAPP_TEMPLATE_NAME", "").strip()
+    api_version = os.environ.get("PORTA_WHATSAPP_API_VERSION", "v22.0").strip()
+    return bool(
+        re.fullmatch(r"\d+", phone_number_id)
+        and access_token
+        and re.fullmatch(r"[A-Za-z0-9_]+", template_name)
+        and re.fullmatch(r"v\d{1,3}\.\d{1,2}", api_version)
+    )
+
+
+def send_whatsapp_verification_code(recipient: str, code: str) -> None:
+    if not is_whatsapp_verification_configured():
+        raise VerificationDeliveryError(
+            "WhatsApp verification is not configured. Set Porta’s Meta WhatsApp Cloud API credentials and approved verification template."
+        )
+    api_version = os.environ.get("PORTA_WHATSAPP_API_VERSION", "v22.0").strip()
+    phone_number_id = os.environ["PORTA_WHATSAPP_PHONE_NUMBER_ID"].strip()
+    template_name = os.environ["PORTA_WHATSAPP_TEMPLATE_NAME"].strip()
+    language_code = os.environ.get("PORTA_WHATSAPP_TEMPLATE_LANGUAGE", "en_US").strip()
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": recipient.lstrip("+"),
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language_code},
+            "components": [{
+                "type": "body",
+                "parameters": [{"type": "text", "text": code}],
+            }],
+        },
+    }
+    request = urllib.request.Request(
+        f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {os.environ['PORTA_WHATSAPP_ACCESS_TOKEN'].strip()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            response.read()
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
+        raise VerificationDeliveryError(
+            "Porta could not send the WhatsApp verification code. Check the Meta sender, recipient opt-in, and approved template settings."
+        ) from error
+
+
+def send_email_verification_code(recipient: str, code: str) -> None:
+    if not is_password_reset_configured():
+        raise VerificationDeliveryError(
+            "Email verification is not configured. Ask the Porta administrator to check SMTP settings."
+        )
+    smtp_host = os.environ["PORTA_SMTP_HOST"].strip()
+    sender = os.environ["PORTA_SMTP_FROM"].strip()
+    smtp_port = int(os.environ.get("PORTA_SMTP_PORT", "465"))
+    message = EmailMessage()
+    message["Subject"] = "Your Porta verification code"
+    message["From"] = sender
+    message["To"] = recipient
+    message.set_content(
+        f"Your Porta email verification code is: {code}\n\n"
+        "This code expires in 10 minutes. If you did not create a Porta account, ignore this email."
+    )
+    context = ssl.create_default_context()
+    smtp_connection = (
+        smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=15)
+        if smtp_port == 465
+        else smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+    )
+    try:
+        with smtp_connection as server:
+            if smtp_port == 587:
+                server.ehlo()
+                server.starttls(context=context)
+                server.ehlo()
+            username = os.environ.get("PORTA_SMTP_USERNAME", "").strip()
+            password = os.environ.get("PORTA_SMTP_PASSWORD", "")
+            if username:
+                server.login(username, password)
+            server.send_message(message)
+    except (smtplib.SMTPException, OSError, ValueError) as error:
+        raise VerificationDeliveryError(
+            "Porta could not send the email verification code. Check the sender address and SMTP settings."
+        ) from error
+
+
+def email_hint(email: str) -> str:
+    name, _, domain = email.partition("@")
+    return f"{name[:1]}{'*' * max(2, len(name) - 1)}@{domain}"
+
+
+def send_pending_verification(row: tuple, code: str) -> None:
+    payload = json.loads(row[3])
+    if row[4] == "phone":
+        phone_number = payload.get("phone_number") or payload.get("profile", {}).get("phone_number")
+        send_whatsapp_verification_code(phone_number, code)
+    else:
+        send_email_verification_code(payload["email"], code)
+
+
+def hash_password(password: str, salt: bytes) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        PASSWORD_ITERATIONS,
+    ).hex()
+
+
+_DUMMY_PASSWORD_SALT = bytes(16)
+_DUMMY_PASSWORD_HASH = hash_password("unusable-account-password", _DUMMY_PASSWORD_SALT)
+
+
+def create_session(connection: sqlite3.Connection, account_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + TOKEN_LIFETIME
+    connection.execute(
+        "INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, ?, ?)",
+        (
+            hashlib.sha256(token.encode("utf-8")).hexdigest(),
+            account_id,
+            expires_at.isoformat(),
+        ),
+    )
+    return token
+
+
+def public_account(row: sqlite3.Row | tuple) -> dict[str, object]:
+    try:
+        saved_languages = json.loads(row[9])
+        languages = saved_languages if isinstance(saved_languages, list) else [row[9]]
+    except (json.JSONDecodeError, TypeError):
+        languages = [row[9]] if row[9] else []
+    try:
+        learning_goals = json.loads(row[16])
+        if not isinstance(learning_goals, list):
+            learning_goals = []
+    except (json.JSONDecodeError, TypeError, IndexError):
+        learning_goals = []
+    if not learning_goals and row[6]:
+        learning_goals = [row[6]]
+    return {
+        "id": row[0],
+        "full_name": row[1],
+        "first_name": (row[12] if len(row) > 12 else "") or row[1].split(" ", 1)[0],
+        "last_name": (row[13] if len(row) > 13 else "") or row[1].partition(" ")[2],
+        "username": row[14] if len(row) > 14 else "",
+        "phone_number": row[15] if len(row) > 15 else "",
+        "phone_verified": bool(row[17]) if len(row) > 17 else False,
+        "email": row[2],
+        "role": row[3],
+        "interests": json.loads(row[4]),
+        "skills_to_share": json.loads(row[5]),
+        "learning_goal": row[6],
+        "learning_goals": learning_goals,
+        "learning_style": row[7],
+        "location": row[8],
+        "language": languages[0] if languages else "",
+        "languages": languages,
+        "bio": row[10],
+        "profile_complete": bool(row[11] and row[4] and row[8] and row[9]),
+    }
+
+
+ACCOUNT_FIELDS = """
+    accounts.id, accounts.full_name, accounts.email, accounts.role,
+    accounts.interests, accounts.skills_to_share, accounts.learning_goal,
+    accounts.learning_style, accounts.location, accounts.language, accounts.bio,
+    accounts.policies_accepted_at, accounts.first_name, accounts.last_name,
+    accounts.username, accounts.phone_number, accounts.learning_goals,
+    accounts.phone_verified
+"""
+ACCOUNT_SELECT = f"SELECT {ACCOUNT_FIELDS} FROM accounts"
+
+
+def authenticated_account(authorization: str | None) -> tuple[str, dict[str, object]]:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Please log in to continue.")
+    token = authorization[7:].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Please log in to continue.")
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with database() as connection:
+        row = connection.execute(
+            f"""
+            SELECT {ACCOUNT_FIELDS}, sessions.expires_at
+            FROM accounts
+            JOIN sessions ON accounts.id = sessions.account_id
+            WHERE sessions.token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+    if row is None or row[-1] <= datetime.now(timezone.utc).isoformat():
+        raise HTTPException(status_code=401, detail="Your session expired. Please log in again.")
+    return token_hash, public_account(row)
+
+
+def create_oauth_exchange(connection: sqlite3.Connection, account_id: int) -> str:
+    code = secrets.token_urlsafe(32)
+    connection.execute(
+        """
+        INSERT INTO oauth_exchange_codes (code_hash, account_id, expires_at)
+        VALUES (?, ?, ?)
+        """,
+        (
+            hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            account_id,
+            (datetime.now(timezone.utc) + OAUTH_EXCHANGE_LIFETIME).isoformat(),
+        ),
+    )
+    return code
+
+
+def complete_oauth_account(
+    provider: str,
+    subject: str,
+    email: str,
+    name: str,
+) -> tuple[int, bool]:
+    email = email.strip().lower()
+    now = datetime.now(timezone.utc).isoformat()
+    salt = secrets.token_bytes(16)
+    try:
+        with database() as connection:
+            identity = connection.execute(
+                """
+                SELECT account_id FROM oauth_identities
+                WHERE provider = ? AND provider_subject = ?
+                """,
+                (provider, subject),
+            ).fetchone()
+            if identity:
+                return identity[0], False
+
+            existing_account = connection.execute(
+                "SELECT id FROM accounts WHERE email = ? COLLATE NOCASE",
+                (email,),
+            ).fetchone()
+            if existing_account:
+                account_id = existing_account[0]
+            else:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO accounts (
+                        full_name, email, password_salt, password_hash, role, interests,
+                        skills_to_share, learning_goal, learning_style, location,
+                        language, bio, policies_accepted_at, created_at
+                    ) VALUES (?, ?, ?, ?, 'learner', '[]', '[]', '', 'flexible', '', '', '', '', ?)
+                    """,
+                    (
+                        name or email.split("@", 1)[0],
+                        email,
+                        salt.hex(),
+                        hash_password(secrets.token_urlsafe(48), salt),
+                        now,
+                    ),
+                )
+                account_id = cursor.lastrowid
+            connection.execute(
+                """
+                INSERT INTO oauth_identities (provider, provider_subject, account_id)
+                VALUES (?, ?, ?)
+                """,
+                (provider, subject, account_id),
+            )
+            return account_id, existing_account is None
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="This sign-in could not be linked to an account. Please log in with your email and try again.",
+        ) from error
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not complete social sign-in. Please try again.") from error
+
+
+def oauth_identity(claims: object) -> tuple[str, str, str] | None:
+    if not isinstance(claims, Mapping):
+        return None
+    subject = claims.get("sub")
+    email = claims.get("email")
+    verified = claims.get("email_verified") is True
+    name = claims.get("name")
+    if not verified or not isinstance(subject, str) or not subject:
+        return None
+    if not isinstance(email, str) or not EMAIL_PATTERN.fullmatch(email.strip()):
+        return None
+    return subject, email.strip().lower(), name.strip() if isinstance(name, str) else ""
+
+
+def oauth_redirect_uri(provider: str) -> str:
+    public_url = os.environ.get("PORTA_PUBLIC_URL", "http://localhost:8000").strip().rstrip("/")
+    parsed_url = urlparse(public_url)
+    if not parsed_url.netloc or parsed_url.username or parsed_url.password:
+        raise HTTPException(status_code=503, detail="The Porta public URL is not configured correctly.")
+    if parsed_url.scheme != "https" and parsed_url.hostname not in {"localhost", "127.0.0.1"}:
+        raise HTTPException(status_code=503, detail="Social login requires an HTTPS Porta public URL.")
+    return f"{public_url}/api/auth/{provider}/callback"
+
+
+def provider_is_configured(provider: str) -> bool:
+    if provider == "google":
+        return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+    if provider == "linkedin":
+        return bool(LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET)
+    return False
+
+class RecommendRequest(BaseModel):
+    interests: Annotated[list[str], Field(max_length=8)] = Field(default_factory=list)
+    goal: Annotated[str, Field(max_length=300)] = ""
+
+    @field_validator("interests")
+    @classmethod
+    def clean_interests(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(" ".join(value.split())[:60] for value in values if value.strip()))
+
+    @field_validator("goal")
+    @classmethod
+    def clean_goal(cls, value: str) -> str:
+        return " ".join(value.split())
+
+    @model_validator(mode="after")
+    def require_query(self) -> "RecommendRequest":
+        if not self.goal and not self.interests:
+            raise ValueError("Choose a skill or describe what you would like to learn.")
+        return self
+
+
+class CoachRequest(BaseModel):
+    goal: Annotated[str, Field(min_length=8, max_length=500)]
+
+    @field_validator("goal")
+    @classmethod
+    def clean_goal(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if len(cleaned) < 8:
+            raise ValueError("Add a little more detail about what you would like to learn.")
+        return cleaned
+
+
+@app.get("/", include_in_schema=False)
+def home() -> FileResponse:
+    return FileResponse(ROOT / "static" / "index.html")
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/status")
+def status() -> dict[str, bool]:
+    return {
+        "generative_coach_available": is_configured(),
+        "password_reset_available": is_password_reset_configured(),
+        "whatsapp_verification_available": is_whatsapp_verification_configured(),
+        "google_login_available": provider_is_configured("google"),
+        "linkedin_login_available": provider_is_configured("linkedin"),
+    }
+
+
+@app.get("/api/learning-paths")
+def learning_paths() -> dict[str, list[dict]]:
+    return {"paths": LEARNING_PATHS}
+
+
+@app.get("/api/phone-codes")
+def phone_codes() -> dict[str, list[dict[str, str]]]:
+    codes = [
+        {"region": region, "calling_code": str(phonenumbers.country_code_for_region(region))}
+        for region in phonenumbers.SUPPORTED_REGIONS
+        if phonenumbers.country_code_for_region(region)
+    ]
+    return {"regions": sorted(codes, key=lambda item: item["region"])}
+
+
+async def begin_oauth(request: Request, provider: str):
+    if not provider_is_configured(provider):
+        return RedirectResponse(
+            url=f"/?auth_error={provider}_not_configured",
+            status_code=303,
+        )
+    client = oauth.create_client(provider)
+    return await client.authorize_redirect(
+        request,
+        redirect_uri=oauth_redirect_uri(provider),
+    )
+
+
+async def finish_oauth(request: Request, provider: str):
+    if not provider_is_configured(provider):
+        return RedirectResponse(
+            url=f"/?auth_error={provider}_not_configured",
+            status_code=303,
+        )
+    client = oauth.create_client(provider)
+    try:
+        token = await client.authorize_access_token(request)
+    except OAuthError as error:
+        provider_error = error.error if isinstance(error.error, str) else ""
+        logger.warning(
+            "%s sign-in callback rejected by OAuth provider (error=%s)",
+            provider,
+            provider_error or "unknown",
+        )
+        if isinstance(error, MismatchingStateError):
+            feedback_code = "oauth_state_mismatch"
+        else:
+            failure_codes = {
+                "user_cancelled_login": f"{provider}_cancelled",
+                "user_cancelled_authorize": f"{provider}_cancelled",
+                "access_denied": f"{provider}_cancelled",
+                "invalid_client": f"{provider}_app_credentials_invalid",
+                "unauthorized_client": f"{provider}_app_credentials_invalid",
+                "invalid_grant": f"{provider}_authorization_expired",
+                "invalid_redirect_uri": f"{provider}_redirect_mismatch",
+                "redirect_uri_mismatch": f"{provider}_redirect_mismatch",
+                "invalid_scope": f"{provider}_scope_unavailable",
+                "invalid_scope_error": f"{provider}_scope_unavailable",
+            }
+            feedback_code = failure_codes.get(
+                provider_error,
+                f"{provider}_oauth_error" if provider_error else "oauth_failed",
+            )
+        redirect_url = f"/?auth_error={feedback_code}"
+        if provider_error and feedback_code == f"{provider}_oauth_error":
+            safe_error_code = (
+                provider_error[:64]
+                if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", provider_error)
+                else "unknown"
+            )
+            redirect_url += f"&oauth_error_code={safe_error_code}"
+        return RedirectResponse(url=redirect_url, status_code=303)
+
+    claims = token.get("userinfo")
+    if claims is None:
+        claims = await client.userinfo(token=token)
+    identity = oauth_identity(claims)
+    if identity is None:
+        return RedirectResponse(url="/?auth_error=email_not_verified", status_code=303)
+
+    subject, email, name = identity
+    account_id, _ = complete_oauth_account(provider, subject, email, name)
+    try:
+        with database() as connection:
+            code = create_oauth_exchange(connection, account_id)
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not complete social sign-in. Please try again.") from error
+    return RedirectResponse(url=f"/#oauth_code={code}", status_code=303)
+
+
+@app.get("/api/auth/google")
+async def google_login(request: Request):
+    return await begin_oauth(request, "google")
+
+
+@app.get("/api/auth/google/callback")
+async def google_callback(request: Request):
+    return await finish_oauth(request, "google")
+
+
+@app.get("/api/auth/linkedin")
+async def linkedin_login(request: Request):
+    return await begin_oauth(request, "linkedin")
+
+
+@app.get("/api/auth/linkedin/callback")
+async def linkedin_callback(request: Request):
+    return await finish_oauth(request, "linkedin")
+
+
+class OAuthExchangeRequest(BaseModel):
+    code: Annotated[str, Field(min_length=32, max_length=128)]
+
+
+@app.post("/api/auth/exchange")
+def exchange_oauth_code(request: OAuthExchangeRequest) -> dict[str, object]:
+    code_hash = hashlib.sha256(request.code.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with database() as connection:
+            exchange = connection.execute(
+                """
+                SELECT account_id FROM oauth_exchange_codes
+                WHERE code_hash = ? AND expires_at > ?
+                """,
+                (code_hash, now),
+            ).fetchone()
+            if exchange is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This sign-in link has expired. Please sign in with your provider again.",
+                )
+            connection.execute(
+                "DELETE FROM oauth_exchange_codes WHERE code_hash = ?",
+                (code_hash,),
+            )
+            token = create_session(connection, exchange[0])
+            user = connection.execute(
+                ACCOUNT_SELECT + " WHERE accounts.id = ?",
+                (exchange[0],),
+            ).fetchone()
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not complete social sign-in. Please try again.") from error
+    return {"access_token": token, "token_type": "bearer", "user": public_account(user)}
+
+
+@app.post("/api/auth/register", status_code=202)
+def register(request: AccountCreate) -> dict[str, str | int]:
+    if not is_whatsapp_verification_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="WhatsApp verification is not configured yet. Ask the Porta administrator to set up Meta WhatsApp Cloud API.",
+        )
+    if not is_password_reset_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email verification is not configured yet. Ask the Porta administrator to check SMTP settings.",
+        )
+
+    salt = secrets.token_bytes(16)
+    code, code_salt, code_hash = new_verification_code()
+    verification_id = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    payload = request.model_dump(exclude={"password", "password_confirmation", "policies_accepted"})
+    payload["password_salt"] = salt.hex()
+    payload["password_hash"] = hash_password(request.password, salt)
+    payload["policies_accepted_at"] = now.isoformat()
+    payload["full_name"] = " ".join((request.first_name, request.last_name))
+    payload["learning_goal"] = " · ".join(request.learning_goals)[:300] or request.learning_goal
+    payload["language"] = json.dumps(request.languages)
+    try:
+        with database() as connection:
+            connection.execute(
+                "DELETE FROM pending_registrations WHERE expires_at <= ?",
+                (now.isoformat(),),
+            )
+            if connection.execute(
+                "SELECT 1 FROM accounts WHERE email = ? COLLATE NOCASE",
+                (request.email,),
+            ).fetchone():
+                raise HTTPException(status_code=409, detail="An account with this email already exists. Try logging in.")
+            if connection.execute(
+                "SELECT 1 FROM accounts WHERE username = ? COLLATE NOCASE",
+                (request.username,),
+            ).fetchone():
+                raise HTTPException(status_code=409, detail="That username is already taken. Please choose another.")
+            connection.execute(
+                """
+                INSERT INTO pending_registrations (
+                    verification_id, email, username, payload, stage, code_hash,
+                    code_salt, expires_at, last_sent_at, attempts, created_at
+                ) VALUES (?, ?, ?, ?, 'phone', ?, ?, ?, ?, 0, ?)
+                """,
+                (
+                    verification_id,
+                    request.email,
+                    request.username,
+                    json.dumps(payload),
+                    code_hash,
+                    code_salt,
+                    (now + VERIFICATION_CODE_LIFETIME).isoformat(),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+    except sqlite3.IntegrityError as error:
+        if "pending_registration_email_unique" in str(error):
+            raise HTTPException(status_code=409, detail="A verification is already in progress for this email.") from error
+        if "pending_registration_username_unique" in str(error):
+            raise HTTPException(status_code=409, detail="That username is already being registered.") from error
+        raise HTTPException(status_code=503, detail="We could not start account verification. Please try again.") from error
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not start account verification. Please try again.") from error
+
+    try:
+        send_whatsapp_verification_code(request.phone_number, code)
+    except VerificationDeliveryError as error:
+        with database() as connection:
+            connection.execute(
+                "DELETE FROM pending_registrations WHERE verification_id = ?",
+                (verification_id,),
+            )
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return {
+        "verification_id": verification_id,
+        "stage": "phone",
+        "message": "We sent a verification code to your WhatsApp number.",
+        "resend_after_seconds": int(VERIFICATION_RESEND_COOLDOWN.total_seconds()),
+    }
+
+
+def get_pending_registration(connection: sqlite3.Connection, verification_id: str) -> tuple | None:
+    return connection.execute(
+        """
+        SELECT verification_id, email, username, payload, stage, code_hash,
+            code_salt, expires_at, last_sent_at, attempts, created_at, account_id
+        FROM pending_registrations WHERE verification_id = ?
+        """,
+        (verification_id,),
+    ).fetchone()
+
+
+def validate_pending_code(connection: sqlite3.Connection, row: tuple, code: str, stage: str) -> None:
+    now = datetime.now(timezone.utc)
+    if row[4] != stage:
+        raise HTTPException(status_code=409, detail="Complete the current verification step first.")
+    if row[7] <= now.isoformat():
+        connection.execute(
+            "DELETE FROM pending_registrations WHERE verification_id = ?",
+            (row[0],),
+        )
+        connection.commit()
+        raise HTTPException(status_code=400, detail="That verification code expired. Start account creation again.")
+    if row[9] >= VERIFICATION_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many incorrect codes. Request a new code to continue.")
+    if not verification_code_matches(code, row[6], row[5]):
+        connection.execute(
+            "UPDATE pending_registrations SET attempts = attempts + 1 WHERE verification_id = ?",
+            (row[0],),
+        )
+        connection.commit()
+        raise HTTPException(status_code=400, detail="That verification code is incorrect.")
+
+
+@app.post("/api/auth/register/verify-phone")
+def verify_registration_phone(request: RegistrationVerificationRequest) -> dict[str, str | int]:
+    code, code_salt, code_hash = new_verification_code()
+    now = datetime.now(timezone.utc)
+    try:
+        with database() as connection:
+            row = get_pending_registration(connection, request.verification_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="This registration has expired. Start account creation again.")
+            if row[11] is not None:
+                raise HTTPException(status_code=409, detail="Verify this phone from the signed-in profile form.")
+            validate_pending_code(connection, row, request.code, "phone")
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not verify your phone number. Please try again.") from error
+    try:
+        send_email_verification_code(row[1], code)
+    except VerificationDeliveryError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    try:
+        with database() as connection:
+            fresh_row = get_pending_registration(connection, request.verification_id)
+            if fresh_row is None:
+                raise HTTPException(status_code=404, detail="This registration has expired. Start account creation again.")
+            if fresh_row[11] is not None:
+                raise HTTPException(status_code=409, detail="Verify this phone from the signed-in profile form.")
+            validate_pending_code(connection, fresh_row, request.code, "phone")
+            connection.execute(
+                """
+                UPDATE pending_registrations SET stage = 'email', code_hash = ?,
+                    code_salt = ?, expires_at = ?, last_sent_at = ?, attempts = 0
+                WHERE verification_id = ?
+                """,
+                (
+                    code_hash,
+                    code_salt,
+                    (now + VERIFICATION_CODE_LIFETIME).isoformat(),
+                    now.isoformat(),
+                    request.verification_id,
+                ),
+            )
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not advance to email verification. Please try again.") from error
+    return {
+        "stage": "email",
+        "email_hint": email_hint(row[1]),
+        "message": "Your WhatsApp number is verified. We sent a code to your email.",
+        "resend_after_seconds": int(VERIFICATION_RESEND_COOLDOWN.total_seconds()),
+    }
+
+
+@app.post("/api/auth/register/verify-email", status_code=201)
+def verify_registration_email(request: RegistrationVerificationRequest) -> dict[str, object]:
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with database() as connection:
+            row = get_pending_registration(connection, request.verification_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="This registration has expired. Start account creation again.")
+            validate_pending_code(connection, row, request.code, "email")
+            payload = json.loads(row[3])
+            cursor = connection.execute(
+                """
+                INSERT INTO accounts (
+                    full_name, email, password_salt, password_hash, role, interests,
+                    skills_to_share, learning_goal, learning_style, location, language,
+                    bio, policies_accepted_at, first_name, last_name, username,
+                    phone_number, learning_goals, phone_verified, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (
+                    payload["full_name"], payload["email"], payload["password_salt"],
+                    payload["password_hash"], payload["role"], json.dumps(payload["interests"]),
+                    json.dumps(payload["skills_to_share"]), payload["learning_goal"],
+                    payload["learning_style"], payload["location"], payload["language"],
+                    payload["bio"], payload["policies_accepted_at"], payload["first_name"],
+                    payload["last_name"], payload["username"], payload["phone_number"],
+                    json.dumps(payload["learning_goals"]), now,
+                ),
+            )
+            account_id = cursor.lastrowid
+            token = create_session(connection, account_id)
+            account = connection.execute(ACCOUNT_SELECT + " WHERE id = ?", (account_id,)).fetchone()
+            connection.execute(
+                "DELETE FROM pending_registrations WHERE verification_id = ?",
+                (request.verification_id,),
+            )
+    except sqlite3.IntegrityError as error:
+        if "accounts_username_unique" in str(error):
+            raise HTTPException(status_code=409, detail="That username is already taken. Please choose another.") from error
+        if getattr(error, "sqlite_errorname", "") == "SQLITE_CONSTRAINT_UNIQUE":
+            raise HTTPException(status_code=409, detail="An account with this email already exists. Try logging in.") from error
+        raise HTTPException(status_code=503, detail="We could not finish creating your account. Please try again.") from error
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not finish creating your account. Please try again.") from error
+    return {"access_token": token, "token_type": "bearer", "user": public_account(account)}
+
+
+@app.post("/api/auth/register/resend")
+def resend_registration_code(request: RegistrationResendRequest) -> dict[str, str | int]:
+    now = datetime.now(timezone.utc)
+    code, code_salt, code_hash = new_verification_code()
+    try:
+        with database() as connection:
+            row = get_pending_registration(connection, request.verification_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="This registration has expired. Start account creation again.")
+            if row[7] <= now.isoformat():
+                connection.execute(
+                    "DELETE FROM pending_registrations WHERE verification_id = ?",
+                    (request.verification_id,),
+                )
+                connection.commit()
+                raise HTTPException(status_code=400, detail="This registration expired. Start account creation again.")
+            elapsed = now - datetime.fromisoformat(row[8])
+            if elapsed < VERIFICATION_RESEND_COOLDOWN:
+                wait_seconds = int((VERIFICATION_RESEND_COOLDOWN - elapsed).total_seconds()) + 1
+                raise HTTPException(status_code=429, detail=f"Please wait {wait_seconds} seconds before requesting another code.")
+            connection.execute(
+                """
+                UPDATE pending_registrations SET code_hash = ?, code_salt = ?,
+                    expires_at = ?, last_sent_at = ?, attempts = 0
+                WHERE verification_id = ?
+                """,
+                (
+                    code_hash, code_salt, (now + VERIFICATION_CODE_LIFETIME).isoformat(),
+                    now.isoformat(), request.verification_id,
+                ),
+            )
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not resend the verification code. Please try again.") from error
+    try:
+        send_pending_verification(row, code)
+    except VerificationDeliveryError as error:
+        with database() as connection:
+            connection.execute(
+                """
+                UPDATE pending_registrations SET code_hash = ?, code_salt = ?,
+                    expires_at = ?, last_sent_at = ?, attempts = ?
+                WHERE verification_id = ?
+                """,
+                (row[5], row[6], row[7], row[8], row[9], request.verification_id),
+            )
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    destination = "WhatsApp" if row[4] == "phone" else "email"
+    return {
+        "stage": row[4],
+        "message": f"We sent a new verification code to your {destination}.",
+        "email_hint": email_hint(row[1]) if row[4] == "email" else "",
+        "resend_after_seconds": int(VERIFICATION_RESEND_COOLDOWN.total_seconds()),
+    }
+
+
+@app.post("/api/auth/me/phone-verification")
+def start_profile_phone_verification(
+    request: PhoneVerificationStartRequest,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, str | int]:
+    _, user = authenticated_account(authorization)
+    if user["profile_complete"] or user["phone_verified"]:
+        raise HTTPException(status_code=409, detail="This Porta account does not need phone verification.")
+    if not is_whatsapp_verification_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="WhatsApp verification is not configured yet. Ask the Porta administrator to set up Meta WhatsApp Cloud API.",
+        )
+    profile = request.profile
+    if (
+        not profile.first_name
+        or not profile.last_name
+        or not profile.username
+        or not profile.phone_number
+        or not profile.languages
+        or not profile.interests
+        or (profile.role in {"peer_tutor", "both"} and not profile.skills_to_share)
+    ):
+        raise HTTPException(status_code=422, detail="Complete all required profile details before verifying your phone.")
+    code, code_salt, code_hash = new_verification_code()
+    verification_id = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    try:
+        with database() as connection:
+            if connection.execute(
+                "SELECT 1 FROM accounts WHERE username = ? COLLATE NOCASE AND id != ?",
+                (profile.username, user["id"]),
+            ).fetchone():
+                raise HTTPException(status_code=409, detail="That username is already taken. Please choose another.")
+            connection.execute(
+                "DELETE FROM pending_registrations WHERE account_id = ?",
+                (user["id"],),
+            )
+            connection.execute(
+                """
+                INSERT INTO pending_registrations (
+                    verification_id, email, username, payload, stage, code_hash,
+                    code_salt, expires_at, last_sent_at, attempts, created_at, account_id
+                ) VALUES (?, ?, ?, ?, 'phone', ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    verification_id, user["email"], profile.username,
+                    json.dumps({"profile": profile.model_dump(), "policies_accepted": True}),
+                    code_hash, code_salt,
+                    (now + VERIFICATION_CODE_LIFETIME).isoformat(),
+                    now.isoformat(), now.isoformat(), user["id"],
+                ),
+            )
+    except sqlite3.IntegrityError as error:
+        if "pending_registration_email_unique" in str(error):
+            raise HTTPException(status_code=409, detail="A registration verification is already in progress for this email.") from error
+        if "pending_registration_username_unique" in str(error):
+            raise HTTPException(status_code=409, detail="That username is already being registered.") from error
+        raise HTTPException(status_code=503, detail="We could not start phone verification. Please try again.") from error
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not start phone verification. Please try again.") from error
+    try:
+        send_whatsapp_verification_code(profile.phone_number, code)
+    except VerificationDeliveryError as error:
+        with database() as connection:
+            connection.execute(
+                "DELETE FROM pending_registrations WHERE verification_id = ?",
+                (verification_id,),
+            )
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return {
+        "verification_id": verification_id,
+        "stage": "phone",
+        "message": "We sent a verification code to your WhatsApp number.",
+        "resend_after_seconds": int(VERIFICATION_RESEND_COOLDOWN.total_seconds()),
+    }
+
+
+@app.post("/api/auth/me/phone-verification/confirm")
+def confirm_profile_phone_verification(
+    request: RegistrationVerificationRequest,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    token_hash, user = authenticated_account(authorization)
+    try:
+        with database() as connection:
+            row = get_pending_registration(connection, request.verification_id)
+            if row is None or row[11] != user["id"]:
+                raise HTTPException(status_code=404, detail="This phone verification is no longer available.")
+            validate_pending_code(connection, row, request.code, "phone")
+            payload = json.loads(row[3])
+            connection.execute(
+                "UPDATE accounts SET phone_verified = 1 WHERE id = ?",
+                (user["id"],),
+            )
+            connection.execute(
+                "DELETE FROM pending_registrations WHERE verification_id = ?",
+                (request.verification_id,),
+            )
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not verify your phone number. Please try again.") from error
+    updated = update_account(
+        AccountUpdate.model_validate(payload),
+        authorization,
+    )
+    return updated
+
+
+@app.post("/api/auth/login")
+def login(request: LoginRequest) -> dict[str, object]:
+    try:
+        with database() as connection:
+            row = connection.execute(
+                "SELECT id, password_salt, password_hash FROM accounts WHERE email = ? COLLATE NOCASE",
+                (request.email,),
+            ).fetchone()
+            salt = bytes.fromhex(row[1]) if row is not None else _DUMMY_PASSWORD_SALT
+            expected_hash = row[2] if row is not None else _DUMMY_PASSWORD_HASH
+            password_matches = secrets.compare_digest(hash_password(request.password, salt), expected_hash)
+            if row is None or not password_matches:
+                raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+            token = create_session(connection, row[0])
+            account = connection.execute(ACCOUNT_SELECT + " WHERE id = ?", (row[0],)).fetchone()
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not log you in. Please try again.") from error
+    return {"access_token": token, "token_type": "bearer", "user": public_account(account)}
+
+
+@app.post("/api/auth/password-reset/request")
+def request_password_reset(request: PasswordResetRequest) -> dict[str, str]:
+    if not is_password_reset_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Password reset email is not configured yet. Ask the site administrator to set up SMTP.",
+        )
+
+    email_hash = hashlib.sha256(request.email.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+    try:
+        with database() as connection:
+            connection.execute(
+                "DELETE FROM password_reset_tokens WHERE expires_at <= ?",
+                (now.isoformat(),),
+            )
+            connection.execute(
+                "DELETE FROM password_reset_requests WHERE requested_at <= ?",
+                ((now - timedelta(days=1)).isoformat(),),
+            )
+            previous_request = connection.execute(
+                "SELECT requested_at FROM password_reset_requests WHERE email_hash = ?",
+                (email_hash,),
+            ).fetchone()
+            if previous_request:
+                previous_at = datetime.fromisoformat(previous_request[0])
+                if now - previous_at < RESET_REQUEST_COOLDOWN:
+                    return {
+                        "status": "received",
+                        "message": "If an account matches that email, reset instructions will be sent shortly.",
+                    }
+            account = connection.execute(
+                "SELECT id FROM accounts WHERE email = ? COLLATE NOCASE",
+                (request.email,),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO password_reset_requests (email_hash, requested_at) VALUES (?, ?)
+                ON CONFLICT(email_hash) DO UPDATE SET requested_at = excluded.requested_at
+                """,
+                (email_hash, now.isoformat()),
+            )
+            if account is None:
+                return {
+                    "status": "received",
+                    "message": "If an account matches that email, reset instructions will be sent shortly.",
+                }
+
+            connection.execute(
+                "DELETE FROM password_reset_tokens WHERE account_id = ?",
+                (account[0],),
+            )
+            token = secrets.token_urlsafe(32)
+            connection.execute(
+                "INSERT INTO password_reset_tokens (token_hash, account_id, expires_at) VALUES (?, ?, ?)",
+                (
+                    hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                    account[0],
+                    (now + RESET_TOKEN_LIFETIME).isoformat(),
+                ),
+            )
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not process the reset request. Please try again.") from error
+
+    try:
+        send_password_reset_email(request.email, token)
+    except (PasswordResetEmailConfigurationError, smtplib.SMTPException, OSError, ValueError) as error:
+        try:
+            with database() as connection:
+                connection.execute(
+                    "DELETE FROM password_reset_tokens WHERE token_hash = ?",
+                    (hashlib.sha256(token.encode("utf-8")).hexdigest(),),
+                )
+                connection.execute(
+                    "DELETE FROM password_reset_requests WHERE email_hash = ?",
+                    (email_hash,),
+                )
+        except sqlite3.Error as cleanup_error:
+            raise HTTPException(
+                status_code=503,
+                detail="Reset email delivery failed, and Porta could not clean up the reset request.",
+            ) from cleanup_error
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Porta could not deliver the reset email. Check your spam folder and ask the site "
+                "administrator to verify the sender address and SMTP settings."
+            ),
+        ) from error
+
+    return {
+        "status": "received",
+        "message": "If an account matches that email, reset instructions will be sent shortly.",
+    }
+
+
+@app.post("/api/auth/password-reset/confirm")
+def confirm_password_reset(request: PasswordResetConfirm) -> dict[str, str]:
+    token_hash = hashlib.sha256(request.token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+    salt = secrets.token_bytes(16)
+    try:
+        with database() as connection:
+            reset = connection.execute(
+                """
+                SELECT account_id FROM password_reset_tokens
+                WHERE token_hash = ? AND expires_at > ?
+                """,
+                (token_hash, now),
+            ).fetchone()
+            if reset is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This password reset link is invalid or has expired. Request a new one.",
+                )
+            connection.execute(
+                "UPDATE accounts SET password_salt = ?, password_hash = ? WHERE id = ?",
+                (salt.hex(), hash_password(request.new_password, salt), reset[0]),
+            )
+            connection.execute("DELETE FROM sessions WHERE account_id = ?", (reset[0],))
+            connection.execute("DELETE FROM password_reset_tokens WHERE account_id = ?", (reset[0],))
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="We could not update your password. Please try again.") from error
+    return {
+        "status": "password_updated",
+        "message": "Your password has been updated. Log in with your new password.",
+    }
+
+
+@app.get("/api/auth/me")
+def get_account(authorization: Annotated[str | None, Header()] = None) -> dict[str, object]:
+    _, account = authenticated_account(authorization)
+    return {"user": account}
+
+
+@app.get("/api/people")
+def search_people(
+    q: str,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, list[dict[str, object]]]:
+    _, current_user = authenticated_account(authorization)
+    query = q.strip()
+    if len(query) < 2 or len(query) > 60:
+        raise HTTPException(status_code=422, detail="Search with 2 to 60 characters.")
+    escaped_query = query.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped_query}%"
+    with database() as connection:
+        rows = connection.execute(
+            f"""
+            {ACCOUNT_SELECT}
+            WHERE accounts.id != ?
+              AND accounts.policies_accepted_at != ''
+              AND accounts.username != ''
+              AND (
+                LOWER(accounts.full_name) LIKE ? ESCAPE '\\'
+                OR LOWER(accounts.username) LIKE ? ESCAPE '\\'
+              )
+            ORDER BY accounts.full_name COLLATE NOCASE
+            LIMIT 20
+            """,
+            (current_user["id"], pattern, pattern),
+        ).fetchall()
+    people = []
+    for row in rows:
+        account = public_account(row)
+        people.append({
+            "id": account["id"],
+            "full_name": account["full_name"],
+            "username": account["username"],
+            "location": account["location"],
+            "languages": account["languages"],
+            "role": account["role"],
+            "interests": account["interests"],
+            "skills_to_share": account["skills_to_share"],
+            "bio": account["bio"],
+        })
+    return {"people": people}
+
+
+@app.put("/api/auth/me")
+def update_account(
+    request: AccountUpdate,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    token_hash, current_user = authenticated_account(authorization)
+    if not current_user["profile_complete"] and not request.policies_accepted:
+        raise HTTPException(
+            status_code=422,
+            detail="Accept the profile and community terms to finish creating your Porta account.",
+        )
+    profile = request.profile
+    if not current_user["profile_complete"] and not current_user["phone_verified"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Verify your WhatsApp number before finishing your Porta profile.",
+        )
+    if not current_user["profile_complete"] and (
+        not profile.first_name
+        or not profile.last_name
+        or not profile.username
+        or not profile.phone_number
+        or not profile.languages
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Add your first and last name, username, phone number, and at least one language to finish your profile.",
+        )
+    policies_accepted_at = datetime.now(timezone.utc).isoformat() if request.policies_accepted else ""
+    languages = profile.languages or ([profile.language] if profile.language else [])
+    full_name = " ".join(part for part in (profile.first_name, profile.last_name) if part)
+    try:
+        with database() as connection:
+            if profile.username:
+                existing_username = connection.execute(
+                    "SELECT id FROM accounts WHERE username = ? COLLATE NOCASE AND id != ?",
+                    (profile.username, current_user["id"]),
+                ).fetchone()
+                if existing_username:
+                    raise HTTPException(status_code=409, detail="That username is already taken. Please choose another.")
+            connection.execute(
+                """
+                UPDATE accounts SET role = ?, interests = ?, skills_to_share = ?,
+                    learning_goal = ?, learning_style = ?, location = ?, language = ?, bio = ?,
+                    learning_goals = ?,
+                    first_name = CASE WHEN ? = '' THEN first_name ELSE ? END,
+                    last_name = CASE WHEN ? = '' THEN last_name ELSE ? END,
+                    full_name = CASE WHEN ? = '' THEN full_name ELSE ? END,
+                    username = CASE WHEN ? = '' THEN username ELSE ? END,
+                    phone_number = CASE WHEN ? = '' THEN phone_number ELSE ? END,
+                    phone_verified = CASE WHEN ? = '' THEN phone_verified ELSE 1 END,
+                    policies_accepted_at = CASE WHEN ? = '' THEN policies_accepted_at ELSE ? END
+                WHERE id = (SELECT account_id FROM sessions WHERE token_hash = ?)
+                """,
+                (
+                    profile.role,
+                    json.dumps(profile.interests),
+                    json.dumps(profile.skills_to_share),
+                    profile.learning_goal,
+                    profile.learning_style,
+                    profile.location,
+                    json.dumps(languages),
+                    profile.bio,
+                    json.dumps(profile.learning_goals or ([profile.learning_goal] if profile.learning_goal else [])),
+                    profile.first_name, profile.first_name,
+                    profile.last_name, profile.last_name,
+                    full_name, full_name,
+                    profile.username, profile.username,
+                    profile.phone_number, profile.phone_number,
+                    policies_accepted_at,
+                    policies_accepted_at,
+                    policies_accepted_at,
+                    token_hash,
+                ),
+            )
+            row = connection.execute(
+                ACCOUNT_SELECT
+                + " WHERE id = (SELECT account_id FROM sessions WHERE token_hash = ?)",
+                (token_hash,),
+            ).fetchone()
+    except sqlite3.Error as error:
+        if "accounts_username_unique" in str(error):
+            raise HTTPException(status_code=409, detail="That username is already taken. Please choose another.") from error
+        raise HTTPException(status_code=503, detail="We could not update your profile. Please try again.") from error
+    if row is None:
+        raise HTTPException(status_code=401, detail="Your session expired. Please log in again.")
+    return {"user": public_account(row)}
+
+
+@app.post("/api/auth/logout")
+def logout(authorization: Annotated[str | None, Header()] = None) -> dict[str, str]:
+    token_hash, _ = authenticated_account(authorization)
+    with database() as connection:
+        connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+    return {"status": "logged_out"}
+
+
+@app.post("/api/recommend")
+def recommend(
+    request: RecommendRequest,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    _, user = authenticated_account(authorization)
+    if not user["profile_complete"]:
+        raise HTTPException(status_code=403, detail="Finish setting up your Porta profile first.")
+    matches = recommend_paths(request.interests, request.goal)
+    return {
+        "matches": matches,
+        "algorithm": "tfidf_cosine_similarity",
+        "score_note": "Relative text similarity, not a probability or a guarantee of fit.",
+    }
+
+
+@app.post("/api/coach")
+async def coach(
+    request: CoachRequest,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, str]:
+    _, user = authenticated_account(authorization)
+    if not user["profile_complete"]:
+        raise HTTPException(status_code=403, detail="Finish setting up your Porta profile first.")
+    try:
+        from asyncio import to_thread
+
+        plan = await to_thread(create_learning_plan, request.goal)
+    except CoachUnavailableError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="The AI learning coach is not configured yet. Porta's local recommendations are still available.",
+        ) from error
+    except CoachProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return {"plan": plan}
