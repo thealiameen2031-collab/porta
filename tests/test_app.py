@@ -1,3 +1,4 @@
+import asyncio
 import smtplib
 import sqlite3
 import ssl
@@ -70,8 +71,41 @@ def clear_local_smtp_configuration(monkeypatch):
 
 
 def make_client(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("VERCEL", raising=False)
     monkeypatch.setenv("PORTA_DB_PATH", str(tmp_path / "porta-test.sqlite3"))
     return TestClient(app)
+
+
+def test_postgres_connection_translates_sqlite_placeholders():
+    class FakeConnection:
+        def execute(self, query, parameters):
+            self.query = query
+            self.parameters = parameters
+            return self
+
+    connection = FakeConnection()
+    cursor = porta_app.PostgresConnection(connection).execute(
+        "SELECT id FROM accounts WHERE email = ? AND username = ?",
+        ("member@example.com", "member"),
+    )
+
+    assert cursor is connection
+    assert connection.query == "SELECT id FROM accounts WHERE email = %s AND username = %s"
+    assert connection.parameters == ("member@example.com", "member")
+
+
+def test_vercel_startup_requires_persistent_database_and_session_secret(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("PORTA_SESSION_SECRET", raising=False)
+
+    async def start_app():
+        async with app.router.lifespan_context(app):
+            pass
+
+    with pytest.raises(RuntimeError, match="DATABASE_URL, PORTA_SESSION_SECRET"):
+        asyncio.run(start_app())
 
 
 def create_account(client, payload=None):

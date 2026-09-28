@@ -6,7 +6,7 @@ Porta is a Qatar-first peer-learning concept: people learn from each other, with
 
 - An accessible, responsive learning experience shown after members log in, with a login-first account gate.
 - A login-first flow and profile questionnaire for learners, peer tutors, or people who want to do both. Sign-up captures first/last name, a unique username, phone number with country calling code, a searchable country selection, custom interest/learning/sharing tags, and up to three searchable languages. Learning and sharing prompts appear according to the selected role.
-- A Python API that saves accounts and learning profiles to a local SQLite database, hashes passwords with PBKDF2, and issues revocable bearer-token sessions.
+- A Python API that saves accounts and learning profiles to local SQLite for development or PostgreSQL when `DATABASE_URL` is configured, hashes passwords with PBKDF2, and issues revocable bearer-token sessions.
 - A social-app workspace with a hover-expanding sidebar for the feed, people search, class discovery, communities, chats, dashboard/Porta Pay, and profile. Members can switch between the violet light theme and a custom dark theme.
 - A community discovery screen that turns profile interests into clearly labeled future community concepts, without presenting them as live groups.
 - Authenticated people search across complete member profiles. Search results intentionally omit email addresses and phone numbers.
@@ -45,6 +45,21 @@ To run the tests:
 python -m pip install -r requirements-dev.txt
 pytest
 ```
+
+## Deploy on Vercel with Neon
+
+The repository includes a Vercel Python entry point and routes the site and API through FastAPI. For deployment, create a Neon PostgreSQL project and use its **pooled** connection string as `DATABASE_URL` in the Vercel project's production environment. Porta creates or migrates its schema when the service starts. The local SQLite database is not copied to Neon; the production database starts empty unless you separately arrange a deliberate data migration.
+
+Import this GitHub repository into Vercel and set the following environment variables before the first production deployment:
+
+- `DATABASE_URL`: the Neon pooled PostgreSQL connection string.
+- `PORTA_SESSION_SECRET`: a persistent, randomly generated secret. Do not reuse or commit it.
+- `PORTA_PUBLIC_URL`: the exact public HTTPS origin assigned to the Vercel deployment.
+- `PORTA_SMTP_HOST`, `PORTA_SMTP_PORT`, `PORTA_SMTP_FROM`, `PORTA_SMTP_USERNAME`, and `PORTA_SMTP_PASSWORD`: a verified email sender for email verification and password recovery.
+- `PORTA_WHATSAPP_PHONE_NUMBER_ID`, `PORTA_WHATSAPP_ACCESS_TOKEN`, `PORTA_WHATSAPP_TEMPLATE_NAME`, and `PORTA_WHATSAPP_TEMPLATE_LANGUAGE`: an approved Meta WhatsApp Cloud API sender and template for the first signup-verification step.
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` and `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET`, if social sign-in is needed.
+
+Set the Google and LinkedIn callback URLs to `https://<your-public-origin>/api/auth/google/callback` and `https://<your-public-origin>/api/auth/linkedin/callback` respectively. Keep all credentials in Vercel's environment settings, not in GitHub or chat. Redeploy after changing variables. The account-creation flow intentionally remains unavailable until both SMTP email delivery and WhatsApp verification are configured. A Vercel deployment can be created from the connected GitHub repository; this checkout does not contain Vercel account credentials and cannot create or configure external Neon/Vercel resources on your behalf.
 
 ## Configure the optional AI coach
 
